@@ -1,0 +1,15 @@
+/* Plotly overrides — keep charts flush with card edges */
+.js-plotly-plot .plotly,
+.js-plotly-plot .plotly .main-svg {
+  border-radius: 0;
+}
+
+/* Remove Plotly's default drag cursor on non-interactive charts */
+.js-plotly-plot .plotly .nsewdrag {
+  cursor: default;
+}
+
+/* Ensure modebar stays hidden (config sets displayModeBar:false, but belt+suspenders) */
+.modebar-container {
+  display: none !important;
+}
