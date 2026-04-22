@@ -37,9 +37,16 @@ def api_transactions():
     search = request.args.get("search", "")
     category = request.args.get("category", "")
     year_month = request.args.get("year_month", "")
-    page = int(request.args.get("page", 1))
-    result = dp.get_transactions(search=search, category=category, year_month=year_month, page=page)
+    page     = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 50))
+    result = dp.get_transactions(search=search, category=category, year_month=year_month, page=page, per_page=per_page)
     return jsonify(result)
+
+
+@app.route("/api/radial")
+def api_radial():
+    category = request.args.get("category", "")
+    return jsonify(dp.get_radial_data(category or None))
 
 
 @app.route("/api/categories/list")

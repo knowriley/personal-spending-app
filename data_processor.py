@@ -109,6 +109,7 @@ def get_transactions(
     df = df.iloc[(page - 1) * per_page : page * per_page]
 
     rows = df[["date", "name", "category_norm", "amount", "account"]].copy()
+    rows["day_of_week"] = rows["date"].dt.strftime("%A")  # e.g. "Monday"
     rows["date"] = rows["date"].dt.strftime("%Y-%m-%d")
     rows["amount"] = rows["amount"].round(2)
     rows = rows.rename(columns={"category_norm": "category"})
@@ -153,6 +154,35 @@ def get_summary_stats() -> dict:
         "current_month": latest,
         "date_range": {"start": months[0], "end": months[-1]},
     }
+
+
+def get_radial_data(category: Optional[str] = None) -> dict:
+    """Return monthly spending by calendar year for a radar chart.
+
+    Returns {year_str: [jan, feb, ..., dec]} — 12 floats each, 0 where no data.
+    """
+    df = load_data()
+    if category:
+        df = df[df["category_norm"] == category]
+
+    df = df.copy()
+    df["year"]  = df["date"].dt.year
+    df["month"] = df["date"].dt.month
+
+    grouped = (
+        df.groupby(["year", "month"])["amount"]
+        .sum()
+        .reset_index()
+    )
+
+    result = {}
+    for year, grp in grouped.groupby("year"):
+        months = [0.0] * 12
+        for _, row in grp.iterrows():
+            months[int(row["month"]) - 1] = round(float(row["amount"]), 2)
+        result[str(int(year))] = months
+
+    return result
 
 
 def get_categories_list() -> list[str]:

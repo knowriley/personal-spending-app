@@ -23,6 +23,10 @@ The app runs at `http://localhost:5000` in debug mode.
 
 **Templates** — Jinja2 with `base.html` / `index.html`. Tailwind CSS via Play CDN (no build step). Custom accent color palette: `accent-{50,100,200,500,600,700}` maps to indigo.
 
+## Design requirements
+
+The app must always be fully responsive. Every layout, component, chart, and table should work cleanly at mobile, tablet, and desktop widths. Use Tailwind responsive prefixes (`sm:`, `md:`, `lg:`) for breakpoints. Never hardcode fixed pixel widths on containers. Plotly charts must use `responsive: true` in their config.
+
 ## CSV format
 
 Expected columns: `date`, `name`, `amount`, `status`, `category`, `parent category`, `excluded`, `tags`, `type`, `account`, `account mask`, `note`, `recurring`. The file is exported from a personal finance tool (Copilot). To refresh data, replace `transactions.csv` — the in-memory cache will reload on next server start (or restart the server).

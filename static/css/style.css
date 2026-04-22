@@ -1,15 +1,32 @@
-/* Plotly overrides — keep charts flush with card edges */
+/* ── Side panel — push layout ────────────────────────────────────────────────
+   The aside starts at width:0 (hidden). When .panel-open is added it expands
+   to 33vw, pushing the main content area to the left. The inner div stays
+   fixed-width so content doesn't reflow during the transition. */
+
+#txn-panel {
+  width: 0;
+  transition: width 0.3s ease-in-out;
+}
+
+#txn-panel.panel-open {
+  width: 33vw;
+}
+
+.txn-panel-inner {
+  width: 33vw;
+  min-width: 33vw;
+}
+
+/* ── Plotly overrides ────────────────────────────────────────────────────────*/
 .js-plotly-plot .plotly,
 .js-plotly-plot .plotly .main-svg {
   border-radius: 0;
 }
 
-/* Remove Plotly's default drag cursor on non-interactive charts */
 .js-plotly-plot .plotly .nsewdrag {
   cursor: default;
 }
 
-/* Ensure modebar stays hidden (config sets displayModeBar:false, but belt+suspenders) */
 .modebar-container {
   display: none !important;
 }
