@@ -473,6 +473,8 @@ function loadRadialChart() {
       x: 0.5,
       xanchor: 'center',
       font: { size: 12 },
+      itemclick: false,
+      itemdoubleclick: false,
     },
     margin: { t: 20, r: 40, b: 60, l: 40 },
   }, PLOTLY_CONFIG);

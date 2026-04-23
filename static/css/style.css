@@ -27,6 +27,22 @@
   cursor: default;
 }
 
+/* Legend is display-only — no pointer */
+.js-plotly-plot .plotly .legend,
+.js-plotly-plot .plotly .legend .bg,
+.js-plotly-plot .plotly .legend .scrollbox,
+.js-plotly-plot .plotly .legend .legendtoggle,
+.js-plotly-plot .plotly .legend .legendtext {
+  cursor: default !important;
+  pointer-events: none;
+}
+
+/* Radial fill traces are non-interactive — suppress pointer on their paths */
+.js-plotly-plot .plotly .fills path {
+  cursor: default;
+  pointer-events: none;
+}
+
 .modebar-container {
   display: none !important;
 }
