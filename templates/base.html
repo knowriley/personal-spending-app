@@ -3,31 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Spending</title>
+  <title>MoneyHabits</title>
 
-  <!-- Tailwind Play CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-          },
-          colors: {
-            accent: {
-              50:  '#eef2ff',
-              100: '#e0e7ff',
-              200: '#c7d2fe',
-              500: '#6366f1',
-              600: '#4f46e5',
-              700: '#4338ca',
-            }
-          }
-        }
-      }
-    }
-  </script>
+  <!-- Tailwind CSS (built locally) -->
+  <link rel="stylesheet" href="/static/css/tailwind.css" />
 
   <!-- Inter font -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -43,18 +22,46 @@
 <body class="bg-gray-50 text-gray-900 font-sans antialiased h-full flex flex-col overflow-hidden">
 
   <!-- Top nav -->
-  <header class="bg-white border-b border-gray-200 shrink-0 z-10">
+  <header class="bg-white border-b border-gray-200 shrink-0 z-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
-      <span class="font-semibold text-gray-800 tracking-tight">Spending</span>
-      <nav class="flex gap-1" id="tab-nav">
-        <button data-tab="overview"      class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Overview</button>
-        <button data-tab="categories"    class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Categories</button>
-        <button data-tab="trends"        class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Trends</button>
-        <button data-tab="transactions"  class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Transactions</button>
-        <button data-tab="radial"        class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Radial</button>
-      </nav>
+      <span class="font-semibold text-gray-800 tracking-tight">MoneyHabits</span>
+
+      <div class="flex items-center gap-3">
+        <nav class="flex gap-1" id="tab-nav">
+          <button data-tab="overview"      class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Overview</button>
+          <button data-tab="habits"        class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Habits</button>
+          <button data-tab="transactions"  class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Transactions</button>
+        </nav>
+
+        <div class="relative" id="dataset-switcher">
+          <button id="dataset-switcher-btn" type="button"
+            class="flex items-center gap-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-md px-3 py-1.5 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500">
+            <span id="dataset-switcher-label">…</span>
+            <svg class="w-3.5 h-3.5 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"/>
+            </svg>
+          </button>
+          <div id="dataset-switcher-panel"
+            class="hidden absolute right-0 z-20 mt-1 min-w-[14rem] bg-white border border-gray-200 rounded-xl shadow-lg py-1"></div>
+        </div>
+      </div>
     </div>
   </header>
+
+  <!-- Secondary nav: active page title + supporting info -->
+  <div class="bg-white border-b border-gray-200 shrink-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4">
+      <div class="relative inline-block">
+        <h1 id="page-title" class="text-3xl font-semibold tracking-tight text-gray-900">This Month's Snapshot</h1>
+        <!-- Habits-only category chip dropdown (anchored under the heading) -->
+        <div id="hc-chip-panel"
+             class="hidden absolute left-0 mt-2 min-w-[18rem] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-2">
+          <div id="hc-cat-panel-list" class="p-2"></div>
+        </div>
+      </div>
+      <p id="page-subtitle" class="text-sm text-gray-600 mt-1">&nbsp;</p>
+    </div>
+  </div>
 
   <!-- Layout: scrollable main + slide-in panel -->
   <div class="flex flex-1 overflow-hidden">
@@ -116,6 +123,9 @@
     </aside>
 
   </div>
+
+  <!-- Shared custom tooltip used by every Plotly chart in app.js (see tip*HTML builders) -->
+  <div id="ct-tip" class="hidden fixed pointer-events-none z-50"></div>
 
   {% block scripts %}{% endblock %}
 </body>
