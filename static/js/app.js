@@ -1,14 +1,37 @@
 // ── Shared Plotly theme ───────────────────────────────────────────────────────
-const PLOTLY_LAYOUT = {
-  paper_bgcolor: '#ffffff',
-  plot_bgcolor:  '#ffffff',
-  font: { family: 'Inter, ui-sans-serif, system-ui, sans-serif', color: '#374151' },
-  margin: { t: 10, r: 10, b: 40, l: 10 },
-  colorway: ['#6366f1','#818cf8','#a5b4fc','#c7d2fe','#e0e7ff',
-             '#f97316','#fb923c','#fca5a1','#34d399','#facc15'],
-};
+// Lazily resolved so the CSS custom-property tokens (loaded from style.css) are
+// available by the time the first chart renders. All Plotly layouts spread
+// `...plotlyLayout()` rather than referencing a top-level constant so the
+// theme stays a single source of truth for colors / fonts / margins.
+let _plotlyLayout = null;
+function plotlyLayout() {
+  if (_plotlyLayout) return _plotlyLayout;
+  _plotlyLayout = {
+    paper_bgcolor: token('color-white'),
+    plot_bgcolor:  token('color-white'),
+    font: { family: 'Inter, ui-sans-serif, system-ui, sans-serif', color: token('color-gray-700') },
+    margin: { t: 10, r: 10, b: 40, l: 10 },
+    colorway: [
+      token('color-plot-0'), token('color-plot-1'), token('color-plot-2'),
+      token('color-plot-3'), token('color-plot-4'), token('color-plot-5'),
+      token('color-plot-6'), token('color-plot-7'), token('color-plot-8'),
+      token('color-plot-9'),
+    ],
+  };
+  return _plotlyLayout;
+}
 
 const PLOTLY_CONFIG = { displayModeBar: false, responsive: true };
+
+// Set role + aria-label on a chart container so screen readers announce the
+// visualization with a meaningful summary instead of an empty <div>. Call
+// after each Plotly render so the label reflects the current state.
+function setChartA11y(elId, label) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', label);
+}
 
 function fmt(n) {
   return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -61,7 +84,7 @@ function tipCard({ accentSlug = '', title = '', meta = '', value = '', rows = []
 // Render a category badge (emoji + name) for use inside .ct-tip-title.
 function tipCatBadge(name) {
   const e = catEmoji(name);
-  const emoji = e ? `<span class="cat-emoji">${e}</span>` : '';
+  const emoji = e ? `<span class="cat-emoji" aria-hidden="true">${e}</span>` : '';
   return `${emoji}${escHtml(name)}`;
 }
 
@@ -85,19 +108,31 @@ function showTab(name) {
   // Close the Habits page-header chip dropdown on any tab change so leaving
   // Habits with the panel open doesn't leave it visible elsewhere.
   document.getElementById('hc-chip-panel')?.classList.add('hidden');
-  if (name === 'overview')     setPageHeader("This Month's Snapshot", '');
+  if (name === 'overview') {
+    if (overviewSnapshot) renderOverviewHeader(overviewSnapshot);
+    else setPageHeader('Overview', '');
+    document.getElementById('ov-month-panel')?.classList.add('hidden');
+  }
   if (name === 'habits')       setHabitsPageHeader();
-  if (name === 'transactions') setPageHeader('Transactions', transactionsSubtitle());
+  if (name === 'transactions') {
+    document.getElementById('ov-month-panel')?.classList.add('hidden');
+    setPageHeader('Transactions', transactionsSubtitle());
+  }
+  const tabLabel = name.charAt(0).toUpperCase() + name.slice(1);
+  document.title = `MoneyHabits — ${tabLabel}`;
   ['overview', 'habits', 'transactions'].forEach(t => {
     const sec = document.getElementById('section-' + t);
     if (sec) sec.classList.toggle('hidden', t !== name);
   });
   document.querySelectorAll('.tab-btn').forEach(btn => {
     const active = btn.dataset.tab === name;
-    btn.classList.toggle('bg-accent-100', active);
-    btn.classList.toggle('text-accent-700', active);
-    btn.classList.toggle('text-gray-600', !active);
-    btn.classList.toggle('hover:bg-gray-100', !active);
+    btn.classList.toggle('bg-neutral-100', active);
+    btn.classList.toggle('text-neutral-900', active);
+    btn.classList.toggle('font-semibold', active);
+    btn.classList.toggle('text-neutral-600', !active);
+    btn.classList.toggle('hover:bg-neutral-50', !active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.setAttribute('tabindex', active ? '0' : '-1');
   });
   if (name === 'overview')     initOverviewTab();
   if (name === 'habits' && !habitsInited) {
@@ -110,6 +145,95 @@ function showTab(name) {
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab));
 });
+
+document.getElementById('brand-home-btn')?.addEventListener('click', () => showTab('overview'));
+
+// Tablist keyboard nav (manual activation: arrows move focus, Enter/Space activates).
+// Per WAI-ARIA Authoring Practices: ←/→ cycle focus among tabs, Home/End jump to ends.
+document.getElementById('tab-nav')?.addEventListener('keydown', e => {
+  const tabs = Array.from(document.querySelectorAll('#tab-nav .tab-btn'));
+  const idx  = tabs.indexOf(document.activeElement);
+  if (idx < 0) return;
+  let next = -1;
+  if (e.key === 'ArrowRight')      next = (idx + 1) % tabs.length;
+  else if (e.key === 'ArrowLeft')  next = (idx - 1 + tabs.length) % tabs.length;
+  else if (e.key === 'Home')       next = 0;
+  else if (e.key === 'End')        next = tabs.length - 1;
+  else if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    showTab(tabs[idx].dataset.tab);
+    return;
+  }
+  if (next >= 0) {
+    e.preventDefault();
+    tabs[next].focus();
+  }
+});
+
+
+// ── Dropdown a11y helper ─────────────────────────────────────────────────────
+// Wires the standard menu/listbox a11y contract to a button + panel pair:
+//   • aria-haspopup + aria-expanded toggling
+//   • Escape closes and restores focus to the trigger
+//   • ArrowDown on the trigger opens and focuses the first item
+//   • ArrowUp/ArrowDown/Home/End cycle focus among items inside the panel
+// Idempotent — `data-dropdown-wired` guards against double-binding when a
+// re-rendered button (e.g. the Habits chip) is wired again.
+function wireDropdown(btn, panel, opts = {}) {
+  if (!btn || !panel) return;
+  btn.setAttribute('aria-haspopup', opts.haspopup || 'listbox');
+  if (!btn.hasAttribute('aria-expanded')) btn.setAttribute('aria-expanded', 'false');
+  const focusItems = () => Array.from(
+    panel.querySelectorAll('button:not([disabled]), [role="menuitem"], [role="option"], [tabindex="0"]')
+  ).filter(el => el.offsetParent !== null);
+  if (!btn.dataset.dropdownWired) {
+    btn.dataset.dropdownWired = '1';
+    btn.addEventListener('keydown', e => {
+      const open = !panel.classList.contains('hidden');
+      if (e.key === 'Escape' && open) {
+        e.preventDefault();
+        panel.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+      } else if (e.key === 'ArrowDown' && !open) {
+        e.preventDefault();
+        panel.classList.remove('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+        setTimeout(() => focusItems()[0]?.focus(), 0);
+      }
+    });
+  }
+  if (!panel.dataset.dropdownWired) {
+    panel.dataset.dropdownWired = '1';
+    panel.addEventListener('keydown', e => {
+      const items = focusItems();
+      if (!items.length) return;
+      const idx = items.indexOf(document.activeElement);
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        panel.classList.add('hidden');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.focus();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        items[(idx + 1) % items.length].focus();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        items[(idx - 1 + items.length) % items.length].focus();
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        items[0].focus();
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        items[items.length - 1].focus();
+      }
+    });
+    // Mirror the panel's hidden state into aria-expanded so external toggles
+    // (existing click handlers) stay in sync without each having to remember.
+    new MutationObserver(() => {
+      btn.setAttribute('aria-expanded', panel.classList.contains('hidden') ? 'false' : 'true');
+    }).observe(panel, { attributes: true, attributeFilter: ['class'] });
+  }
+}
 
 
 // ── Dataset switcher (header) ────────────────────────────────────────────────
@@ -126,13 +250,14 @@ async function initDatasetSwitcher() {
 
   panel.innerHTML = datasets.map(d => `
     <button type="button" data-key="${d.key}"
-      class="w-full text-left text-sm px-3 py-2 hover:bg-gray-50 flex items-center justify-between
-             ${d.active ? 'text-accent-700 font-semibold' : 'text-gray-700'}">
+      class="w-full text-left text-sm px-3 py-2 hover:bg-neutral-50 flex items-center justify-between
+             ${d.active ? 'text-neutral-900 font-semibold' : 'text-neutral-700'}">
       <span>${d.label}</span>
-      ${d.active ? '<span class="text-accent-600">●</span>' : ''}
+      ${d.active ? '<span class="text-neutral-700">●</span>' : ''}
     </button>
   `).join('');
 
+  wireDropdown(btn, panel);
   btn.addEventListener('click', e => {
     e.stopPropagation();
     panel.classList.toggle('hidden');
@@ -183,19 +308,48 @@ function prevMonthOf(ym) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// Range label for the 3-month-avg tooltip — mirrors data_processor's
+// [m-3, m-2, m-1] window. Collapses the year when start and end share one.
+function threeMonthAvgRangeLabel(ym) {
+  const end   = prevMonthOf(ym);
+  const start = prevMonthOf(prevMonthOf(end));
+  if (!start || !end) return '';
+  const startFull = formatMonthLabel(start);
+  const endFull   = formatMonthLabel(end);
+  if (start.slice(0, 4) === end.slice(0, 4)) {
+    return `${startFull.split(' ')[0]} – ${endFull}`;
+  }
+  return `${startFull} – ${endFull}`;
+}
+
 const OVERVIEW_DEFAULT_EXCLUDES = ['Rent'];
 
 let overviewInited   = false;
 let overviewSnapshot = null;
+let overviewMonths   = [];
 
 async function initOverviewTab() {
   if (overviewInited) return;
   overviewInited = true;
 
+  // Load the dataset's month list once for the header dropdown.
+  try {
+    overviewMonths = await fetch('/api/months/list').then(r => r.json());
+  } catch (e) { /* dropdown falls back to just the active month */ }
+
+  await loadAndRenderOverview();
+}
+
+// Re-entrant: invoked on initial load (no month) and again whenever the user
+// picks a month from the header dropdown.
+async function loadAndRenderOverview(month) {
   let snap;
   try {
+    const sParams = new URLSearchParams();
+    if (month) sParams.set('month', month);
+    const snapUrl = '/api/overview/snapshot' + (sParams.toString() ? '?' + sParams : '');
     [snap] = await Promise.all([
-      fetch('/api/overview/snapshot').then(r => r.json()),
+      fetch(snapUrl).then(r => r.json()),
       loadCategoryMeta(),
     ]);
   } catch (e) {
@@ -222,11 +376,21 @@ async function initOverviewTab() {
   wireOverviewActions(snap);
 }
 
+function setOverviewMonth(month) {
+  document.getElementById('ov-month-panel')?.classList.add('hidden');
+  loadAndRenderOverview(month);
+}
+
+// Returns { text, direction } where direction is:
+//   'up'   → spending is HIGHER (bad signal — utility-red)
+//   'down' → spending is LOWER  (good signal — utility-green)
+//   'flat' → on pace             (neutral)
+// Or null when there's no comparable last-month anchor.
 function computeSmartMessage(snap) {
-  // Need a real last-month MTD comparison anchor.
   if (snap.last_month_mtd == null || snap.last_month_mtd <= 0) return null;
 
   const dLm = (snap.this_month_total - snap.last_month_mtd) / snap.last_month_mtd;
+  const lastMonthLabel = formatMonthLabel(prevMonthOf(snap.month));
 
   // Anomaly check: was last month itself an outlier vs its own 3-mo average?
   let lmAnomaly = null;
@@ -243,23 +407,118 @@ function computeSmartMessage(snap) {
     const dAvg = (snap.this_month_total - snap.three_month_avg_mtd) / snap.three_month_avg_mtd;
     const pct = Math.round(Math.abs(dAvg) * 100);
     const dir = dAvg >= 0 ? 'more' : 'less';
-    return `${pct}% ${dir} than your 3-month average`;
+    return {
+      text: `${pct}% ${dir} than your 3-month average`,
+      direction: dAvg >= 0 ? 'up' : 'down',
+    };
   }
 
-  if (Math.abs(dLm) < 0.05) return 'On pace with last month';
+  if (Math.abs(dLm) < 0.05) return { text: `On pace with ${lastMonthLabel}`, direction: 'flat' };
 
   const pct = Math.round(Math.abs(dLm) * 100);
   const dir = dLm >= 0 ? 'more' : 'less';
-  return `${pct}% ${dir} than last month`;
+  return {
+    text: `${pct}% ${dir} than ${lastMonthLabel}`,
+    direction: dLm >= 0 ? 'up' : 'down',
+  };
 }
 
+// Inline trend icon for the smart message — straight diagonal arrow (no
+// trend-line curve). `direction` is 'up' | 'down' | 'flat'; flat returns no
+// icon (the wording "On pace…" carries enough meaning without one).
+function trendIconHtml(direction) {
+  if (direction === 'up') {
+    return `<svg class="w-4 h-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 13 13 3"/>
+      <path d="M6 3h7v7"/>
+    </svg>`;
+  }
+  if (direction === 'down') {
+    return `<svg class="w-4 h-4 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 3 13 13"/>
+      <path d="M13 6v7H6"/>
+    </svg>`;
+  }
+  return '';
+}
+
+// Custom HTML override of the secondary nav title — bypasses setPageHeader's
+// plain-text path so we can embed the month-picker chip and a small eyebrow.
+// Mirrors setHabitsPageHeader's approach.
 function renderOverviewHeader(snap) {
   if (!snap) return;
+  const titleEl = document.getElementById('page-title');
+  const subEl   = document.getElementById('page-subtitle');
+  if (!titleEl || !subEl) return;
+
   const monthLabel = formatMonthLabel(snap.month);
-  const subtitle = snap.is_fallback
-    ? `Showing latest available month — ${monthLabel}`
-    : monthLabel;
-  setPageHeader("This Month's Snapshot", subtitle);
+
+  titleEl.innerHTML =
+      `<span class="block text-base font-semibold text-neutral-600 mb-1">Overview</span>`
+    + `Your Spending Snapshot for `
+    + `<button id="ov-month-btn" type="button"`
+    + ` class="cursor-pointer hover:opacity-80 underline decoration-solid underline-offset-4`
+    + ` focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-sm"`
+    + ` aria-haspopup="listbox" aria-expanded="false">`
+    + escHtml(monthLabel)
+    + `</button>`;
+
+  subEl.innerHTML = '&nbsp;';
+
+  buildOverviewMonthPanel(snap.month);
+}
+
+// Build / re-build the month dropdown anchored under the chip. Re-rendered
+// on every snap change so the active-month highlight stays accurate.
+function buildOverviewMonthPanel(activeMonth) {
+  const titleEl = document.getElementById('page-title');
+  const wrapper = titleEl?.parentElement; // .relative inline-block in base.html
+  const chip    = document.getElementById('ov-month-btn');
+  if (!wrapper || !chip) return;
+
+  let panel = document.getElementById('ov-month-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'ov-month-panel';
+    panel.className = 'hidden absolute z-30 mt-2 min-w-[12rem] max-h-[60vh] overflow-y-auto bg-white border border-neutral-200 rounded-xl shadow-lg py-1';
+    wrapper.appendChild(panel);
+  }
+
+  // Always include the active month in case the dataset's month list missed it.
+  const months = (overviewMonths.length ? overviewMonths.slice() : []);
+  if (!months.includes(activeMonth)) months.push(activeMonth);
+  months.sort();
+
+  panel.innerHTML = '';
+  months.slice().reverse().forEach(m => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    const isActive = m === activeMonth;
+    b.className = ['block w-full text-left text-sm px-3 py-1.5 hover:bg-neutral-50 whitespace-nowrap',
+                   isActive ? 'bg-neutral-100 text-neutral-900 font-semibold' : 'text-neutral-700'].join(' ');
+    b.textContent = formatMonthLabel(m);
+    b.addEventListener('click', () => setOverviewMonth(m));
+    panel.appendChild(b);
+  });
+
+  // Anchor the panel under the chip's left edge / bottom (within the shared
+  // .relative wrapper). offsetTop+offsetHeight puts it just below the button.
+  panel.style.left = chip.offsetLeft + 'px';
+  panel.style.top  = (chip.offsetTop + chip.offsetHeight + 4) + 'px';
+
+  wireDropdown(chip, panel);
+  if (!chip.dataset.ovToggleWired) {
+    chip.dataset.ovToggleWired = '1';
+    chip.addEventListener('click', e => {
+      e.stopPropagation();
+      panel.classList.toggle('hidden');
+    });
+    document.addEventListener('click', e => {
+      if (!panel.contains(e.target) && e.target !== chip) {
+        panel.classList.add('hidden');
+      }
+    });
+  }
 }
 
 const OVERVIEW_INFO_ICON = `
@@ -271,63 +530,61 @@ const OVERVIEW_INFO_ICON = `
 // Info-icon trigger + styled popover (.info-tt / .info-tt-bubble in style.css).
 // Replaces native `title`-based tooltips so the cursor doesn't go question-mark
 // and the bubble matches our visual language.
-function infoTooltip(text) {
-  return `<span class="info-tt shrink-0 text-gray-400" tabindex="0">${OVERVIEW_INFO_ICON}<span class="info-tt-bubble">${escHtml(text)}</span></span>`;
+function infoTooltip(text, ariaLabel = 'More information') {
+  return `<span class="info-tt shrink-0 text-neutral-400" tabindex="0" role="img" aria-label="${escHtml(ariaLabel)}">${OVERVIEW_INFO_ICON}<span class="info-tt-bubble">${escHtml(text)}</span></span>`;
 }
 
-// Single ghost-button class composition used by all four card linkouts.
-// Mirrors the existing chip/button style elsewhere in the codebase
-// (compare chip, window picker, category chip).
-function ghostButton(label, action) {
+// Link button — the only click-through type used inside content surfaces
+// (Overview cards, future card-bottom CTAs). Inline / content-sized;
+// underline on the label drops on hover, bg shifts to surface-recessed.
+function linkButton(label, action) {
   return `
     <button type="button" data-overview-action="${action}"
-      class="inline-flex items-center justify-center gap-1.5 w-full
-             text-sm font-medium text-gray-700
-             border border-gray-300 rounded-lg
+      class="link-btn inline-flex items-center gap-1.5
+             text-sm font-medium text-neutral-600
+             bg-white shadow-sm rounded-lg
              px-3.5 py-2
-             bg-white shadow-sm
-             hover:bg-gray-50 hover:border-gray-400
-             focus:outline-none focus:ring-2 focus:ring-accent-500
+             hover:bg-neutral-50 hover:text-neutral-700
+             focus:outline-none focus:ring-2 focus:ring-accent-700
              transition-colors">
-      ${escHtml(label)}
+      <span class="link-btn-lbl underline decoration-solid underline-offset-2">${escHtml(label)}</span>
       <span aria-hidden="true">&rarr;</span>
     </button>
   `;
 }
 
 // Card-level shared classes (constants so all four cards stay in lockstep).
-const CARD_SHELL = 'bg-white border border-gray-200 rounded-lg p-6 h-full flex flex-col';
-const CARD_LABEL = 'text-base font-semibold text-gray-900';
-const CARD_VALUE = 'text-6xl font-semibold tracking-tight text-gray-900 mt-3 break-words';
-const CARD_VALUE_MISS = 'text-6xl font-semibold tracking-tight text-gray-400 mt-3 cursor-help';
+const CARD_SHELL = 'bg-white border border-neutral-200 rounded-lg p-6 h-full flex flex-col';
+const CARD_LABEL = 'text-base font-semibold text-neutral-900';
+const CARD_VALUE = 'text-6xl font-semibold tracking-tight text-neutral-900 mt-3 break-words';
+const CARD_VALUE_MISS = 'text-6xl font-semibold tracking-tight text-neutral-500 mt-3 cursor-help';
 
 function renderCard1(snap) {
   const card = document.getElementById('overview-card1');
   if (!card) return;
 
   const message = computeSmartMessage(snap);
-  const lastMonth = prevMonthOf(snap.month);
+  const monthLabel = formatMonthLabel(snap.month);
+  const cardLabel = snap.is_partial ? `Spent so far in ${monthLabel}` : `Spent in ${monthLabel}`;
 
-  let tooltip;
-  if (snap.is_partial && snap.through_day) {
-    tooltip = `Compares ${formatMonthLabel(snap.month)} 1–${snap.through_day} to ${formatMonthLabel(lastMonth)} 1–${snap.through_day}.`;
-  } else {
-    tooltip = `Compares ${formatMonthLabel(snap.month)} to ${formatMonthLabel(lastMonth)}.`;
-  }
-
+  // Color the smart message by direction: up = more spending = red,
+  // down = less spending = green, flat = neutral. Trend icon mirrors color.
+  const msgColor = message?.direction === 'up'   ? 'text-utility-red-700'
+                 : message?.direction === 'down' ? 'text-utility-green-700'
+                 :                                 'text-neutral-600';
   const messageHtml = message
-    ? `<p class="text-sm text-gray-600 mt-2 flex items-center gap-1.5">
-        <span>${escHtml(message)}</span>
-        ${infoTooltip(tooltip)}
+    ? `<p class="text-sm font-medium mt-2 flex items-center gap-1.5 ${msgColor}">
+        ${trendIconHtml(message.direction)}
+        <span>${escHtml(message.text)}</span>
       </p>`
     : '';
 
   card.innerHTML = `
     <div class="${CARD_SHELL}">
-      <p class="${CARD_LABEL}">Spent so far this month</p>
+      <p class="${CARD_LABEL}">${escHtml(cardLabel)}</p>
       <p class="${CARD_VALUE}">${fmt(snap.this_month_total)}</p>
       ${messageHtml}
-      <div class="mt-auto pt-6">${ghostButton('See transactions', 'tx-current')}</div>
+      <div class="mt-auto pt-6">${linkButton('See transactions', 'tx-current')}</div>
     </div>
   `;
 }
@@ -336,17 +593,33 @@ function renderCard2(snap) {
   const card = document.getElementById('overview-card2');
   if (!card) return;
 
-  const has = snap.last_month_mtd != null;
+  const lastMonth = prevMonthOf(snap.month);
+  const lastMonthLabel = formatMonthLabel(lastMonth);
+
+  // Partial focused month → MTD-vs-MTD comparison ("Through Apr 9").
+  // Complete focused month → full prior-month total ("Spent in March 2026").
+  let label, value, has;
+  if (snap.is_partial) {
+    has = snap.last_month_mtd != null;
+    value = snap.last_month_mtd;
+    const lmShortMonth = lastMonthLabel.split(' ')[0].slice(0, 3);
+    label = `Through ${lmShortMonth} ${snap.through_day}`;
+  } else {
+    has = snap.last_month_total != null;
+    value = snap.last_month_total;
+    label = `Spent in ${lastMonthLabel}`;
+  }
+
   const valueHtml = has
-    ? `<p class="${CARD_VALUE}">${fmt(snap.last_month_mtd)}</p>`
+    ? `<p class="${CARD_VALUE}">${fmt(value)}</p>`
     : `<p class="${CARD_VALUE_MISS}" title="No prior month yet">—</p>`;
   const bottomHtml = has
-    ? `<div class="mt-auto pt-6">${ghostButton('See transactions', 'tx-prev-partial')}</div>`
+    ? `<div class="mt-auto pt-6">${linkButton('See transactions', 'tx-prev-partial')}</div>`
     : '';
 
   card.innerHTML = `
     <div class="${CARD_SHELL}">
-      <p class="${CARD_LABEL}">Spent this time last month</p>
+      <p class="${CARD_LABEL}">${escHtml(label)}</p>
       ${valueHtml}
       ${bottomHtml}
     </div>
@@ -362,14 +635,19 @@ function renderCard3(snap) {
     ? `<p class="${CARD_VALUE}">${fmt(snap.three_month_avg)}</p>`
     : `<p class="${CARD_VALUE_MISS}" title="Need 3 prior months">—</p>`;
   const bottomHtml = has
-    ? `<div class="mt-auto pt-6">${ghostButton('Open in Habits', 'habits-3mo')}</div>`
+    ? `<div class="mt-auto pt-6">${linkButton('Open in Habits', 'habits-3mo')}</div>`
     : '';
+
+  const range = threeMonthAvgRangeLabel(snap.month);
+  const tooltipText = has && range
+    ? `Average of ${range} — the 3 most recent complete months.`
+    : 'Calculated from the last 3 complete months of spending.';
 
   card.innerHTML = `
     <div class="${CARD_SHELL}">
       <p class="${CARD_LABEL} flex items-center gap-1.5">
         <span>3-month average</span>
-        ${infoTooltip("Calculated from the last 3 complete months of spending.")}
+        ${infoTooltip(tooltipText)}
       </p>
       ${valueHtml}
       ${bottomHtml}
@@ -384,18 +662,19 @@ function renderCard4(topCats, month) {
   const has = topCats && topCats.length > 0;
   const bodyHtml = has
     ? `<ul class="mt-3 space-y-2">${topCats.map(c =>
-        `<li><span class="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full max-w-full truncate" style="${catChipStyle(c.category)}">${catLabelHtml(c.category)}</span></li>`
+        `<li><span class="inline-flex items-center gap-1.5 text-sm px-2.5 py-1 rounded-full max-w-full truncate" style="${catChipStyle(c.category)}">${catLabelHtml(c.category)}</span></li>`
       ).join('')}</ul>`
-    : `<p class="text-sm text-gray-400 mt-3">No categories yet</p>`;
+    : `<p class="text-sm text-neutral-500 mt-3">No categories yet</p>`;
 
   const bottomHtml = has
-    ? `<div class="mt-auto pt-6">${ghostButton('Open in Habits', 'habits-month')}</div>`
+    ? `<div class="mt-auto pt-6">${linkButton('Open in Habits', 'habits-month')}</div>`
     : '';
 
+  const monthLabel = formatMonthLabel(month);
   el.innerHTML = `
     <div class="${CARD_SHELL}">
       <p class="${CARD_LABEL} flex items-center gap-1.5">
-        <span>Top Categories this month</span>
+        <span>Top Categories in ${escHtml(monthLabel)}</span>
         ${infoTooltip("Excludes fixed expenses like rent by default. Configurable in Habits.")}
       </p>
       ${bodyHtml}
@@ -420,6 +699,18 @@ function wireOverviewActions(snap) {
   });
 }
 
+// Cumulative chart heading: live month gets the "so far" framing; past complete
+// months get the "Total spend" framing. Both name the actual months to mirror
+// the dynamic card labels.
+function chartTitleFor(month) {
+  const now = new Date();
+  const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const thisLabel = formatMonthLabel(month);
+  const lastLabel = formatMonthLabel(prevMonthOf(month));
+  if (month === currentYm) return `Spent so far in ${thisLabel} vs ${lastLabel}`;
+  return `Total spend ${thisLabel} vs ${lastLabel}`;
+}
+
 function renderOverviewLineChart(snap) {
   hideCustomTooltip();
   const container = document.getElementById('overview-chart-card');
@@ -427,11 +718,11 @@ function renderOverviewLineChart(snap) {
 
   // Reset card markup each call (avoids accumulating Plotly chart elements)
   container.innerHTML = `
-    <p class="text-lg font-semibold text-gray-900">${escHtml(formatMonthLabel(snap.month))}</p>
+    <p class="text-lg font-semibold text-neutral-900">${escHtml(chartTitleFor(snap.month))}</p>
     <div id="overview-chart" class="w-full mt-3" style="height:380px"></div>
   `;
 
-  const accentColor = token('color-accent-500');
+  const accentColor = token('color-accent-700');
   const greyColor   = token('color-gray-400');
   const gridColor   = token('color-gray-100');
 
@@ -470,24 +761,26 @@ function renderOverviewLineChart(snap) {
   const maxDays = Math.max(lastDayThis, lastDayLast, 28);
 
   Plotly.newPlot('overview-chart', traces, {
-    ...PLOTLY_LAYOUT,
+    ...plotlyLayout(),
     xaxis: {
       range: [0.5, maxDays + 0.5],
-      tickfont: { size: 11 },
+      tickfont: { size: 12 },
       gridcolor: gridColor,
-      title: { text: 'Day', font: { size: 11 }, standoff: 8 },
+      title: { text: 'Day', font: { size: 12 }, standoff: 8 },
       dtick: 2,
     },
     yaxis: {
       tickformat: '$,.0f',
-      tickfont: { size: 11 },
+      tickfont: { size: 12 },
       gridcolor: gridColor,
-      title: { text: 'Spend', font: { size: 11 } },
+      title: { text: 'Spend', font: { size: 12 }, standoff: 12 },
+      side: 'right',
     },
-    margin: { t: 20, r: 20, b: 50, l: 60 },
+    margin: { t: 20, r: 72, b: 50, l: 20 },
     showlegend: traces.length > 0,
-    legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.12, font: { size: 11 } },
+    legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.12, font: { size: 12 } },
   }, PLOTLY_CONFIG);
+  setChartA11y('overview-chart', 'Cumulative spend chart, current month vs last month, line chart by day');
 
   const ovChart = document.getElementById('overview-chart');
   ovChart?.on('plotly_hover',   evt => showCustomTooltip(tipOverviewCumulHTML(evt), evt.event));
@@ -516,14 +809,16 @@ function goToTransactionsCurrent(snap) {
 }
 
 function goToTransactionsPrevPartial(snap) {
-  if (snap.last_month_mtd == null) return;
+  // Partial focused month → MTD-day-range filter (matches Card 2's "Through Apr 9").
+  // Complete focused month → land on the full prior month (matches "Spent in March 2026").
+  const hasPartialAnchor  = snap.is_partial && snap.last_month_mtd  != null;
+  const hasCompleteAnchor = !snap.is_partial && snap.last_month_total != null;
+  if (!hasPartialAnchor && !hasCompleteAnchor) return;
+
   const lastMonth = prevMonthOf(snap.month);
-  window.moneyHabitsNav = {
-    tab: 'transactions',
-    year_month: lastMonth,
-    start_day: 1,
-    end_day:   snap.through_day,
-  };
+  window.moneyHabitsNav = hasPartialAnchor
+    ? { tab: 'transactions', year_month: lastMonth, start_day: 1, end_day: snap.through_day }
+    : { tab: 'transactions', year_month: lastMonth };
   showTab('transactions');
 }
 
@@ -544,6 +839,13 @@ let lensCompare   = '';                   // YYYY-MM (dormant; UI removed)
 let lensTimeframe = '';                   // preset id (one of WINDOW_PRESETS)
 let lensLevel     = 'all';                // 'all' | 'parent' | 'leaf'
 let lensChartView = 'total';              // 'total' | 'stacked' (only meaningful when level=all)
+
+// Trend chart-type toggle. 'bar' (default) renders the monthly bar chart;
+// 'radial' renders the year-over-year polar chart with one ring per selected
+// year. In-tab session memory only — a hard reload resets to 'bar'. Hidden
+// below the md: breakpoint (radial doesn't read well on phones).
+let chartType    = 'bar';                 // 'bar' | 'radial'
+let radialYears  = new Set();             // YYYY strings, populated on first radial activation
 
 // Drill-down pie mode (only meaningful at parent scope; resets on scope change).
 let ddPieMode    = 'proportion';          // 'proportion' | 'composition'
@@ -629,7 +931,7 @@ function setLensTimeframe(t) {
   setHabitsPageHeader();
   renderHabitsKpis();
   renderCategoryTree();
-  renderHabitsChart();
+  renderHabitsTrend();
   renderDrillDown();
 }
 
@@ -665,17 +967,23 @@ function setHabitsPageHeader() {
   const emoji = lensLevel === 'all' ? '📊'           : catEmoji(name);
 
   // Pill-style chip: bg + fg use the category's chip tokens (matching the
-  // dropdown items); --cat-mid drives the thick bottom border (data viz hue).
+  // dropdown items); --cat-mid drives the colored pill-bar that sits beneath
+  // the chip (data viz hue). The chip + bar are wrapped in a flex-col stack
+  // so the bar sits tightly under the chip rather than at line-end.
   // When the category has no emoji, skip the wrapper entirely so its margin
   // / flex-gap doesn't push the chip onto a new line.
-  const emojiHtml = emoji ? `<span class="cat-emoji">${emoji}</span>` : '';
-  titleEl.innerHTML = `Your Habits for <button id="hc-chip-btn" type="button"`
-    + ` class="hc-chip hc-chip-underline inline-flex items-baseline gap-1 cursor-pointer hover:opacity-80 align-middle ml-1 rounded-lg px-3 py-1"`
-    + ` style="--cat-mid: var(--color-cat-${slug}-mid);`
-    + ` background-color: var(--color-cat-${slug}-bg);`
+  const emojiHtml = emoji ? `<span class="cat-emoji" aria-hidden="true">${emoji}</span>` : '';
+  titleEl.innerHTML = `Your Habits for `
+    + `<span class="inline-flex flex-col align-middle ml-1" id="hc-chip-stack"`
+    + ` style="--cat-mid: var(--color-cat-${slug}-mid);">`
+    + `<button id="hc-chip-btn" type="button"`
+    + ` class="hc-chip inline-flex items-baseline gap-1 cursor-pointer hover:opacity-80 rounded-lg px-3 py-1"`
+    + ` style="background-color: var(--color-cat-${slug}-bg);`
     + ` color: var(--color-cat-${slug}-fg);">`
     + `${emojiHtml}${escHtml(name)}`
-    + `</button>`;
+    + `</button>`
+    + `<div class="hc-chip-bar" aria-hidden="true"></div>`
+    + `</span>`;
 
   subEl.innerHTML = '&nbsp;';
 
@@ -685,6 +993,7 @@ function setHabitsPageHeader() {
   const panel   = document.getElementById('hc-chip-panel');
   if (chipBtn && panel) {
     panel.style.left = chipBtn.offsetLeft + 'px';
+    wireDropdown(chipBtn, panel);
   }
 
   // Re-bind: innerHTML wiped any previous listener on the chip button.
@@ -700,7 +1009,7 @@ function setLensCompare(m) {
   if (lensChartView === 'stacked') m = '';
   lensCompare = m;
   catCompareMonth = m;
-  renderHabitsChart();
+  renderHabitsTrend();
   renderDrillDown();
 }
 
@@ -718,12 +1027,15 @@ function setLensScope({ level, category = '' }) {
   ddPieMode = 'proportion';
   // Close the category chip dropdown if it was open.
   document.getElementById('hc-chip-panel')?.classList.add('hidden');
+  // Scope change invalidates the radial year list (e.g. scoping into Food
+  // hides years that have no Food data) — refresh on the next render.
+  _radialDataCache = null;
   updateBreadcrumbs();
   updateViewToggleUI();
   setHabitsPageHeader();
   renderHabitsKpis();
   renderCategoryTree();
-  renderHabitsChart();
+  renderHabitsTrend();
   renderDrillDown();
 }
 
@@ -734,7 +1046,7 @@ function setScopeLeaf(name)      { setLensScope({ level: 'leaf',   category: nam
 function setLensChartView(v) {
   lensChartView = v;
   updateViewToggleUI();
-  renderHabitsChart();
+  renderHabitsTrend();
   renderDrillDown();
 }
 
@@ -753,13 +1065,13 @@ function updateBreadcrumbs() {
   const crumb = (label, onClick, isLast) => {
     if (isLast) {
       const span = document.createElement('span');
-      span.className = 'text-gray-700';
+      span.className = 'text-neutral-700';
       span.textContent = label;
       return span;
     }
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'hover:text-accent-600 transition-colors';
+    btn.className = 'hover:text-neutral-900 transition-colors';
     btn.textContent = label;
     btn.addEventListener('click', onClick);
     return btn;
@@ -767,7 +1079,8 @@ function updateBreadcrumbs() {
 
   const sep = () => {
     const s = document.createElement('span');
-    s.className = 'text-gray-300 mx-1';
+    s.className = 'text-neutral-300 mx-1';
+    s.setAttribute('aria-hidden', 'true');
     s.textContent = '›';
     return s;
   };
@@ -806,9 +1119,11 @@ function updateViewToggleUI() {
   toggle.classList.toggle('pointer-events-none', !usable);
   toggle.querySelectorAll('.habits-view-btn').forEach(btn => {
     const active = btn.dataset.view === lensChartView;
-    btn.classList.toggle('bg-accent-50',    active);
-    btn.classList.toggle('text-accent-700', active);
-    btn.classList.toggle('text-gray-500',  !active);
+    btn.classList.toggle('bg-neutral-100', active);
+    btn.classList.toggle('text-neutral-900', active);
+    btn.classList.toggle('font-semibold', active);
+    btn.classList.toggle('text-neutral-500',  !active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
 }
 
@@ -821,7 +1136,9 @@ function updateCompareDisabled() {
 }
 
 // ── Habits chart + tree + KPIs ────────────────────────────────────────────────
-const S1_COMPARE_COLOR = '#94a3b8';   // muted slate for the compare-line overlay
+// Muted slate for the compare-line overlay — gray-400 reads as "secondary" but
+// not so faint that it disappears against the chart's main bars.
+const S1_COMPARE_COLOR = () => token('color-gray-400');
 
 // Convert "#rrggbb" → {h, s, l} ∈ [0,1]. Used by derivedShade().
 function hexToHsl(hex) {
@@ -901,10 +1218,42 @@ async function initDashboard() {
     });
   });
 
+  // Bar ↔ Radial chart-type toggle (desktop only — wrapper is hidden via
+  // Tailwind below md:, so listeners on its children are inert on mobile).
+  document.querySelectorAll('.habits-charttype-btn').forEach(btn => {
+    btn.addEventListener('click', () => setChartType(btn.dataset.charttype));
+  });
+
+  // Auto-flip back to bar when the viewport drops below md (768px). The
+  // toggle wrapper is hidden via CSS at that width, but a user might have
+  // chosen radial on desktop and then resized — re-render so they're not
+  // stranded with an inert chart-type they can't change.
+  const mq = window.matchMedia('(min-width: 768px)');
+  const onMqChange = e => {
+    if (!e.matches && chartType === 'radial') setChartType('bar');
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onMqChange);
+  else                     mq.addListener(onMqChange);  // older Safari
+
+  // Year multi-select picker (radial mode only). Panel contents are built
+  // lazily by renderHabitsRadial once we have the data.
+  const yearBtn   = document.getElementById('radial-year-btn');
+  const yearPanel = document.getElementById('radial-year-panel');
+  if (yearBtn && yearPanel) {
+    wireDropdown(yearBtn, yearPanel);
+    yearBtn.addEventListener('click', e => { e.stopPropagation(); yearPanel.classList.toggle('hidden'); });
+    document.addEventListener('click', e => {
+      if (!yearBtn.contains(e.target) && !yearPanel.contains(e.target)) {
+        yearPanel.classList.add('hidden');
+      }
+    });
+  }
+
   // Chart range picker (quick ranges only, lives in chart card header).
   const winBtn   = document.getElementById('s1-window-btn');
   const winPanel = document.getElementById('s1-window-panel');
   if (winBtn && winPanel) {
+    wireDropdown(winBtn, winPanel);
     winBtn.addEventListener('click', e => { e.stopPropagation(); winPanel.classList.toggle('hidden'); });
     document.addEventListener('click', e => {
       if (!winBtn.contains(e.target) && !winPanel.contains(e.target)) {
@@ -920,6 +1269,7 @@ async function initDashboard() {
   const ddBtn   = document.getElementById('dd-month-btn');
   const ddPanel = document.getElementById('dd-month-panel');
   if (ddBtn && ddPanel) {
+    wireDropdown(ddBtn, ddPanel);
     ddBtn.addEventListener('click', e => { e.stopPropagation(); ddPanel.classList.toggle('hidden'); });
     document.addEventListener('click', e => {
       if (!ddBtn.contains(e.target) && !ddPanel.contains(e.target)) {
@@ -962,12 +1312,13 @@ async function initDashboard() {
   buildDrillDownMonthPanel();
   updateBreadcrumbs();
   updateViewToggleUI();
+  syncChartTypeUI();
   setHabitsPageHeader();
 
   await Promise.all([
     renderHabitsKpis(),
     renderCategoryTree(),
-    renderHabitsChart(),
+    renderHabitsTrend(),
     renderDrillDown(),
   ]);
 }
@@ -982,8 +1333,8 @@ function buildS1WindowPanel() {
     b.type = 'button';
     b.dataset.timeframe = p.id;
     const isActive = p.id === lensTimeframe;
-    b.className = ['block w-full text-left text-sm px-3 py-1.5 hover:bg-gray-50',
-                   isActive ? 'bg-accent-50 text-accent-700 font-semibold' : ''].join(' ');
+    b.className = ['block w-full text-left text-sm px-3 py-1.5 hover:bg-neutral-50',
+                   isActive ? 'bg-neutral-100 text-neutral-900 font-semibold' : ''].join(' ');
     b.textContent = p.label;
     b.addEventListener('click', () => {
       panel.classList.add('hidden');
@@ -1007,8 +1358,8 @@ function buildDrillDownMonthPanel() {
     const b = document.createElement('button');
     b.type = 'button';
     const isActive = m === lensMonth;
-    b.className = ['block w-full text-left text-sm px-3 py-1.5 hover:bg-gray-50 whitespace-nowrap',
-                   isActive ? 'bg-accent-50 text-accent-700 font-semibold' : ''].join(' ');
+    b.className = ['block w-full text-left text-sm px-3 py-1.5 hover:bg-neutral-50 whitespace-nowrap',
+                   isActive ? 'bg-neutral-100 text-neutral-900 font-semibold' : ''].join(' ');
     b.textContent = formatMonthLabel(m);
     b.addEventListener('click', () => {
       panel.classList.add('hidden');
@@ -1022,8 +1373,8 @@ function buildDrillDownMonthPanel() {
 }
 
 // ── Filter-aware KPI strip ────────────────────────────────────────────────────
-const KPI_TOP_VALUE_FULL = ['text-2xl', 'font-semibold', 'text-gray-900', 'mt-1', 'truncate'];
-const KPI_TOP_VALUE_EMPTY = ['text-sm', 'text-gray-400', 'mt-1', 'truncate'];
+const KPI_TOP_VALUE_FULL = ['text-5xl', 'font-semibold', 'tracking-tight', 'text-neutral-900', 'mt-1', 'truncate'];
+const KPI_TOP_VALUE_EMPTY = ['text-sm', 'text-neutral-500', 'mt-1', 'truncate'];
 
 async function renderHabitsKpis() {
   const params = new URLSearchParams({ level: lensLevel });
@@ -1140,23 +1491,84 @@ function buildTreeRow({ name, level, total, indent, isActive, onClick, hasChildr
   btn.dataset.name  = name;
   btn.className = [
     'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-sm transition-colors',
-    isActive ? 'bg-accent-50 text-accent-700 ring-1 ring-accent-200' : 'hover:bg-gray-50 text-gray-700',
+    isActive ? 'bg-neutral-100 text-neutral-900 ring-1 ring-neutral-200 font-semibold' : 'hover:bg-neutral-50 text-neutral-700',
   ].join(' ');
   btn.style.paddingLeft = (12 + indent * 16) + 'px';
 
   if (level === 'all') {
     btn.innerHTML = `
       <span class="font-semibold flex-1 truncate">All Spending</span>
-      <span class="text-xs tabular-nums text-gray-500">${fmt(total)}</span>
+      <span class="text-xs tabular-nums text-neutral-500">${fmt(total)}</span>
     `;
   } else {
     btn.innerHTML = `
-      <span class="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full max-w-full truncate" style="${catChipStyle(name)}">${catLabelHtml(name)}</span>
-      <span class="text-xs tabular-nums text-gray-500 ml-auto">${fmt(total)}</span>
+      <span class="inline-flex items-center gap-1.5 text-sm px-2.5 py-1 rounded-full max-w-full truncate" style="${catChipStyle(name)}">${catLabelHtml(name)}</span>
+      <span class="text-xs tabular-nums text-neutral-500 ml-auto">${fmt(total)}</span>
     `;
   }
   btn.addEventListener('click', onClick);
   return btn;
+}
+
+// ── Trend chart dispatcher ────────────────────────────────────────────────────
+// Picks bar vs radial based on chartType. Every setter that needs to rerender
+// the trend chart calls this — keeping the per-mode renderers free to assume
+// they own the chart card slot.
+function renderHabitsTrend() {
+  if (chartType === 'radial') return renderHabitsRadial();
+  return renderHabitsChart();
+}
+
+// Setter for chart type (bar ↔ radial). Re-renders the chart and re-syncs the
+// header controls (timeframe pill, year picker, Total/Stacked toggle, icon
+// toggle). On first activation of radial, defaults `radialYears` to the most
+// recent year present in the dataset (single ring) per PRD §4.
+function setChartType(t) {
+  if (t !== 'bar' && t !== 'radial') return;
+  if (t === chartType) return;
+  chartType = t;
+  hideCustomTooltip();
+  syncChartTypeUI();
+  renderHabitsTrend();
+}
+
+// Toggles a year on/off in the radial selection. No-op when called in bar
+// mode. When the toggle would empty the selection we still allow it — the
+// chart renders an empty-state message.
+function toggleRadialYear(year) {
+  if (radialYears.has(year)) radialYears.delete(year);
+  else                       radialYears.add(year);
+  if (chartType === 'radial') renderHabitsRadial();
+}
+
+// Sync the chart-card header to the active chartType:
+//  - radial: hide timeframe pill + Total/Stacked toggle, show year picker
+//  - bar   : reverse
+// Also re-syncs the icon toggle's pressed state.
+function syncChartTypeUI() {
+  const winDD     = document.getElementById('s1-window-dropdown');
+  const yearDD    = document.getElementById('radial-year-dropdown');
+  const viewTog   = document.getElementById('habits-view-toggle');
+  const isRadial  = chartType === 'radial';
+
+  winDD?.classList.toggle('hidden',   isRadial);
+  yearDD?.classList.toggle('hidden', !isRadial);
+  viewTog?.classList.toggle('hidden', isRadial);
+
+  document.querySelectorAll('.habits-charttype-btn').forEach(btn => {
+    const active = btn.dataset.charttype === chartType;
+    btn.classList.toggle('bg-neutral-100', active);
+    btn.classList.toggle('text-neutral-900', active);
+    btn.classList.toggle('text-neutral-500', !active);
+    btn.classList.toggle('hover:bg-neutral-50', !active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+
+  // Toggle the chart container visibility — Plotly is happy drawing into a
+  // previously-hidden div as long as it has dimensions when newPlot runs, so
+  // each renderer flips its own slot to visible before Plotly.newPlot.
+  document.getElementById('chart-monthly')?.classList.toggle('hidden',  isRadial);
+  document.getElementById('chart-radial') ?.classList.toggle('hidden', !isRadial);
 }
 
 // ── Unified bar chart ─────────────────────────────────────────────────────────
@@ -1233,18 +1645,18 @@ async function renderHabitsChart() {
         type: 'bar',
         x: periods,
         y: primary.map(row => row.totals?.[key] || 0),
-        marker: { color, line: { color: '#ffffff', width: 0.5 } },
+        marker: { color, line: { color: token('color-white'), width: 0.5 } },
         name: key,
         hoverinfo: 'none',
       });
     });
   } else {
     // Single-trace bar (total, leaf, or all-with-no-stack).
-    // 'all' scope is the canonical view → brand indigo (accent-500). Leaf/parent use their own hue.
+    // 'all' scope is the canonical view → brand indigo (accent-700). Leaf/parent use their own hue.
     const totals = primary.map(d => d.total);
     const traceColor = lensLevel === 'leaf'   ? catHex(lensCategory, 'mid')
                      : lensLevel === 'parent' ? catHex(lensCategory, 'mid')
-                     :                          token('color-accent-500');
+                     :                          token('color-accent-700');
     traces.push({
       type: 'bar',
       x: periods,
@@ -1275,8 +1687,8 @@ async function renderHabitsChart() {
       mode: 'lines+markers',
       x: periods,
       y: compareTotals.slice(0, periods.length),
-      line:   { color: S1_COMPARE_COLOR, width: 2, dash: 'dash' },
-      marker: { color: S1_COMPARE_COLOR, size: 5 },
+      line:   { color: S1_COMPARE_COLOR(), width: 2, dash: 'dash' },
+      marker: { color: S1_COMPARE_COLOR(), size: 5 },
       name: `vs ${formatMonthLabel(lensCompare)}`,
       hoverinfo: 'none',
     });
@@ -1286,25 +1698,27 @@ async function renderHabitsChart() {
   const ticktext = periods.map((p, i) => formatPeriodTick(p, granularity, i, periods.length));
 
   Plotly.newPlot('chart-monthly', traces, {
-    ...PLOTLY_LAYOUT,
+    ...plotlyLayout(),
     barmode: mode === 'stacked' ? 'stack' : 'group',
     xaxis: {
       type: 'category',
-      tickfont: { size: 11 },
+      tickfont: { size: 12 },
       tickmode: 'array',
       tickvals: periods,
       ticktext: ticktext,
       tickangle: 0,
     },
-    yaxis: { tickformat: '$,.0f', tickfont: { size: 11 }, gridcolor: '#f3f4f6' },
+    yaxis: { tickformat: '$,.0f', tickfont: { size: 12 }, gridcolor: token('color-gray-100') },
     bargap: 0.3,
     showlegend: mode === 'stacked' || !!lensCompare,
     // Anchor the legend's bottom just above the plot. With more than ~5 entries
     // the legend wraps to multiple rows; yanchor:'bottom' makes additional rows
     // grow upward into the top margin instead of down into the chart.
-    legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.02, yanchor: 'bottom', font: { size: 11 } },
+    legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.02, yanchor: 'bottom', font: { size: 12 } },
     margin: { t: 80, r: 10, b: 50, l: 60 },
   }, PLOTLY_CONFIG);
+  const scopeLabel = lensLevel === 'all' ? 'All spending' : (lensCategory || 'spending');
+  setChartA11y('chart-monthly', `${scopeLabel} trend chart, ${mode === 'stacked' ? 'stacked by parent group' : 'total by ' + granularity}, ${periods.length} ${granularity}${periods.length !== 1 ? 's' : ''}`);
 
   // Click handlers:
   // - Stacked-by-parent (level=all): segment click → drill into that parent (chart re-renders).
@@ -1381,6 +1795,216 @@ function tipBarHTML(evt, mode, primary) {
   const accentSlug = lensLevel === 'all' ? '' : catSlug(lensCategory);
   const titleHtml  = lensLevel === 'all' ? 'All Spending' : tipCatBadge(lensCategory);
   return tipCard({ accentSlug, title: titleHtml, meta: monthLabel, value });
+}
+
+
+// ── Radial (year-over-year) chart ─────────────────────────────────────────────
+// Same scope contract as the bar chart: lensLevel + lensCategory drive the
+// /api/radial filter (parent → ?parent=, leaf → ?category=, all → unfiltered).
+// Independent year multi-select via radialYears (Set<string>) — replaces the
+// timeframe pill in radial mode. Click a node → setLensMonth + scroll to
+// drill-down (same contract as bar clicks; chart does NOT re-render).
+//
+// Cache keyed by scope so flipping years (the user's most common interaction)
+// doesn't refetch the same payload.
+let _radialDataCache = null;
+let _radialDataKey   = '';
+
+function radialScopeKey() {
+  return `${lensLevel}::${lensCategory || ''}`;
+}
+
+async function fetchRadialDataScoped() {
+  const key = radialScopeKey();
+  if (_radialDataCache && _radialDataKey === key) return _radialDataCache;
+  const params = new URLSearchParams();
+  if (lensLevel === 'parent' && lensCategory) params.set('parent', lensCategory);
+  else if (lensLevel === 'leaf' && lensCategory) params.set('category', lensCategory);
+  const url = '/api/radial' + (params.toString() ? '?' + params.toString() : '');
+  _radialDataCache = await fetch(url).then(r => r.json());
+  _radialDataKey   = key;
+  return _radialDataCache;
+}
+
+// Year recency → palette index. visibleYears is ordered most-recent-first.
+function radialColorFor(year, visibleYears) {
+  const palette = radialColors();
+  const idx = visibleYears.indexOf(year);
+  if (idx < 0) return palette[0];
+  return palette[idx % palette.length];
+}
+
+function buildRadialYearPanel(allYears) {
+  const panel = document.getElementById('radial-year-panel');
+  if (!panel) return;
+  panel.innerHTML = '';
+  // Most recent year at top of the list — matches how the user thinks about years.
+  const sortedDesc = allYears.slice().sort().reverse();
+  sortedDesc.forEach(year => {
+    const label = document.createElement('label');
+    label.className = 'flex items-center gap-2.5 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-50 cursor-pointer';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = year;
+    cb.checked = radialYears.has(year);
+    cb.className = 'accent-accent-700 w-3.5 h-3.5';
+    cb.addEventListener('change', () => toggleRadialYear(year));
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(year));
+    panel.appendChild(label);
+  });
+  syncRadialYearLabel(allYears);
+}
+
+function syncRadialYearLabel(allYears) {
+  const labelEl = document.getElementById('radial-year-label');
+  if (!labelEl) return;
+  const sel = [...radialYears];
+  if (sel.length === 0)                     labelEl.textContent = 'No years';
+  else if (sel.length === allYears.length)  labelEl.textContent = 'All years';
+  else if (sel.length === 1)                labelEl.textContent = sel[0];
+  else                                       labelEl.textContent = `${sel.length} years`;
+}
+
+async function renderHabitsRadial() {
+  hideCustomTooltip();
+
+  // Update the chart card title to mirror the bar chart's pattern.
+  const titleEl = document.getElementById('habits-chart-title');
+  if (titleEl) {
+    const scopeLabel = lensLevel === 'all' ? 'All Spending' : lensCategory;
+    titleEl.textContent = `${scopeLabel} — Year-over-Year`;
+  }
+
+  // Make sure the radial slot is the visible one before Plotly.newPlot — it
+  // needs definite dimensions to lay out polar ticks.
+  document.getElementById('chart-monthly')?.classList.add('hidden');
+  document.getElementById('chart-radial') ?.classList.remove('hidden');
+
+  const data     = await fetchRadialDataScoped();
+  const allYears = Object.keys(data).sort();   // ascending
+
+  // First-activation default: most recent year only (single ring per PRD §4).
+  // Also prune any selected years that are no longer present (e.g. after a
+  // scope change to a category that didn't exist in some years).
+  if (radialYears.size === 0 && allYears.length) {
+    radialYears.add(allYears[allYears.length - 1]);
+  } else {
+    [...radialYears].forEach(y => { if (!allYears.includes(y)) radialYears.delete(y); });
+  }
+
+  buildRadialYearPanel(allYears);
+
+  // Visible = selected ∩ has-data — empty rings (year picked but zero spend
+  // for the active scope) are dropped silently per PRD §5.
+  const visibleYears = allYears
+    .filter(y => radialYears.has(y))
+    .filter(y => (data[y] || []).some(v => v > 0))
+    .sort((a, b) => Number(b) - Number(a));   // most recent first → palette index 0
+
+  // Empty-state: render an overlay message when there's nothing to draw.
+  const radialEl = document.getElementById('chart-radial');
+  if (!radialEl) return;
+  if (!visibleYears.length) {
+    Plotly.purge('chart-radial');
+    const scopeLabel = lensLevel === 'all' ? 'all spending' : (lensCategory || 'this scope');
+    radialEl.innerHTML = `
+      <div class="h-full w-full flex items-center justify-center text-sm text-neutral-500">
+        No data for ${escHtml(scopeLabel)} in selected years.
+      </div>`;
+    setChartA11y('chart-radial', `No radial data for ${scopeLabel} in selected years`);
+    return;
+  }
+
+  const theta = [...MONTH_LABELS, 'Jan'];   // close the loop visually
+
+  // Fill traces (under) — flat, no markers, low alpha.
+  const fillTraces = visibleYears.map(year => {
+    const color = radialColorFor(year, visibleYears);
+    const r = [...(data[year] || []), (data[year] || [])[0] || 0];
+    return {
+      type:      'scatterpolar',
+      name:      year,
+      r,
+      theta,
+      fill:      'toself',
+      fillcolor: color + '22',
+      mode:      'none',
+      showlegend: false,
+      hoverinfo: 'skip',
+    };
+  });
+
+  // Line + marker traces on top (markers are the click targets).
+  const lineTraces = visibleYears.map(year => {
+    const color = radialColorFor(year, visibleYears);
+    const r = [...(data[year] || []), (data[year] || [])[0] || 0];
+    return {
+      type:      'scatterpolar',
+      name:      year,
+      r,
+      theta,
+      fill:      'none',
+      mode:      'lines+markers',
+      line:      { color, width: 2 },
+      marker:    { color, size: 5 },
+      hoverinfo: 'none',
+    };
+  });
+
+  Plotly.newPlot('chart-radial', [...fillTraces, ...lineTraces], {
+    ...plotlyLayout(),
+    polar: {
+      bgcolor: token('color-white'),
+      angularaxis: {
+        tickfont:  { size: 12, family: 'Inter, ui-sans-serif, system-ui, sans-serif' },
+        direction: 'clockwise',
+        rotation:  90,
+        gridcolor: token('color-gray-200'),
+        linecolor: token('color-gray-200'),
+      },
+      radialaxis: {
+        showticklabels: false,
+        ticks:     '',
+        gridcolor: token('color-gray-100'),
+        linecolor: token('color-gray-200'),
+        angle:     90,
+      },
+    },
+    legend: {
+      orientation:     'h',
+      y:               -0.08,
+      x:               0.5,
+      xanchor:         'center',
+      font:            { size: 12 },
+      itemclick:       false,
+      itemdoubleclick: false,
+    },
+    margin: { t: 20, r: 40, b: 60, l: 40 },
+  }, PLOTLY_CONFIG);
+
+  const scopeLabel = lensLevel === 'all' ? 'All spending' : (lensCategory || 'spending');
+  setChartA11y('chart-radial',
+    `Year-over-year monthly spending for ${scopeLabel}, ${visibleYears.length} year${visibleYears.length !== 1 ? 's' : ''} shown`);
+
+  // Click a node (marker on a line trace) → setLensMonth + scroll. Skip
+  // clicks on the fill-only traces (curveNumber < visibleYears.length).
+  radialEl.on('plotly_click', evt => {
+    const pt = evt.points?.[0];
+    if (!pt) return;
+    if (pt.curveNumber < visibleYears.length) return;   // fill trace
+    const year      = pt.data?.name;
+    const monthName = pt.theta;
+    const monthNum  = MONTH_NUM[monthName];
+    if (!year || !monthNum) return;
+    const monthKey = `${year}-${String(monthNum).padStart(2, '0')}`;
+    setLensMonth(monthKey);
+    scrollToDrilldown();
+  });
+
+  // Hover → custom tooltip (year title, full month meta, dollar value).
+  radialEl.on('plotly_hover',   evt => showCustomTooltip(tipRadialHTML(evt), evt.event));
+  radialEl.on('plotly_unhover', () => hideCustomTooltip());
 }
 
 
@@ -1511,7 +2135,7 @@ function catEmoji(catNorm) {
 // a category name renders so the emoji always sits next to it.
 function catLabelHtml(catNorm) {
   const e = catEmoji(catNorm);
-  return e ? `<span class="cat-emoji">${e}</span>${escHtml(catNorm)}` : escHtml(catNorm);
+  return e ? `<span class="cat-emoji" aria-hidden="true">${e}</span>${escHtml(catNorm)}` : escHtml(catNorm);
 }
 
 let _catMeta = null;
@@ -1564,40 +2188,41 @@ function buildCategoriesTabUI() {
 
   // Drill-down skeleton — content is filled in by renderDrillDown().
   ddSec.innerHTML = `
-    <div id="dd-inner" class="bg-neutral-50 border border-neutral-200 rounded-lg p-6 flex flex-col gap-6" style="box-shadow:0 20px 25px -5px rgba(0,0,0,0.1),0 10px 10px -5px rgba(0,0,0,0.04)">
+    <div id="dd-inner" class="bg-white border border-neutral-200 rounded-lg p-6 flex flex-col gap-6 shadow-xl">
 
       <!-- Header -->
       <div class="flex items-center justify-between gap-3">
         <div class="flex items-center gap-3 min-w-0">
           <span id="dd-color-dot" class="w-10 h-10 rounded-full flex-none inline-flex items-center justify-center text-xl"></span>
-          <h3 id="dd-cat-name" class="font-bold text-2xl text-gray-500 truncate"></h3>
+          <h3 id="dd-cat-name" class="font-bold text-2xl text-neutral-500 truncate"></h3>
         </div>
 
         <!-- Focused-month picker — drives KPIs + drill-down only -->
         <div class="relative shrink-0" id="dd-month-dropdown">
           <button id="dd-month-btn" type="button"
-            class="flex items-center gap-2 text-sm font-semibold text-gray-700 border border-gray-300 rounded-lg px-3 py-2 bg-white shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500">
+            class="flex items-center gap-2 text-sm font-semibold text-neutral-700 border border-neutral-300 rounded-lg px-3 py-2 bg-white shadow-sm hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-accent-700">
             <span id="dd-month-label">—</span>
-            <svg class="w-3.5 h-3.5 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+            <svg class="w-3.5 h-3.5 text-neutral-400 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
               <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"/>
             </svg>
           </button>
           <div id="dd-month-panel"
-            class="hidden absolute right-0 z-20 mt-1 min-w-[12rem] bg-white border border-gray-200 rounded-xl shadow-lg py-1 max-h-80 overflow-y-auto"></div>
+            class="hidden absolute right-0 z-20 mt-1 min-w-[12rem] bg-white border border-neutral-200 rounded-xl shadow-lg py-1 max-h-80 overflow-y-auto"></div>
         </div>
       </div>
 
-      <!-- Row 1: 5-col grid — pie (2 cols) | quick stats (3 cols) -->
-      <div class="grid grid-cols-5 gap-6">
+      <!-- Row 1: 5-col grid — pie (2 cols) | quick stats (3 cols). Stacks at <md. -->
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
         <!-- Pie card: col 1-2 -->
-        <div class="col-span-2 bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex flex-col">
+        <div class="col-span-1 md:col-span-2 bg-white border border-neutral-200 rounded-lg shadow-sm overflow-hidden flex flex-col">
           <div class="px-6 pt-6 pb-3 shrink-0 flex items-start justify-between gap-3">
-            <p id="dd-pie-title" class="font-semibold text-xl text-gray-900 leading-snug min-w-0"></p>
-            <div id="dd-pie-mode-toggle" class="hidden rounded-lg border border-gray-300 overflow-hidden text-xs shadow-sm shrink-0">
-              <button data-pie-mode="proportion"  type="button"
-                class="dd-pie-mode-btn px-3 py-1.5 font-semibold bg-accent-50 text-accent-700">Proportion</button>
-              <button data-pie-mode="composition" type="button"
-                class="dd-pie-mode-btn px-3 py-1.5 font-semibold text-gray-500 hover:bg-gray-50">Composition</button>
+            <p id="dd-pie-title" class="font-semibold text-xl text-neutral-900 leading-snug min-w-0"></p>
+            <div id="dd-pie-mode-toggle" role="group" aria-label="Pie chart view"
+                 class="hidden rounded-lg border border-neutral-300 overflow-hidden text-xs shadow-sm shrink-0">
+              <button data-pie-mode="proportion"  type="button" aria-pressed="true"
+                class="dd-pie-mode-btn px-3 py-1.5 font-semibold bg-neutral-100 text-neutral-900 font-semibold">Proportion</button>
+              <button data-pie-mode="composition" type="button" aria-pressed="false"
+                class="dd-pie-mode-btn px-3 py-1.5 font-semibold text-neutral-500 hover:bg-neutral-50">Composition</button>
             </div>
           </div>
           <div class="flex-1 px-6 pb-4">
@@ -1606,16 +2231,16 @@ function buildCategoriesTabUI() {
         </div>
 
         <!-- Quick stats: col 3-5, stacked vertically -->
-        <div id="dd-quick-stats" class="col-span-3 flex flex-col gap-4 self-stretch"></div>
+        <div id="dd-quick-stats" class="col-span-1 md:col-span-3 flex flex-col gap-4 self-stretch"></div>
       </div>
 
-      <!-- Row 2: 5-col grid — cumulative chart (3 cols) | top locations (2 cols) -->
-      <div class="grid grid-cols-5 gap-5">
+      <!-- Row 2: 5-col grid — cumulative chart (3 cols) | top locations (2 cols). Stacks at <md. -->
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-5">
         <!-- Cumulative chart: col 1-3 -->
-        <div class="col-span-3 bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col">
+        <div class="col-span-1 md:col-span-3 bg-white border border-neutral-200 rounded-lg shadow-sm flex flex-col">
           <div class="px-6 pt-6 pb-0 flex items-center justify-between shrink-0">
-            <p id="dd-cumul-title" class="font-semibold text-xl text-gray-900"></p>
-            <p id="dd-compare-legend" class="hidden text-xs text-gray-400 italic"></p>
+            <p id="dd-cumul-title" class="font-semibold text-xl text-neutral-900"></p>
+            <p id="dd-compare-legend" class="hidden text-xs text-neutral-500 italic"></p>
           </div>
           <div class="flex-1 px-6 pb-6 pt-3">
             <div id="dd-cumulative" class="w-full" style="height:160px"></div>
@@ -1623,9 +2248,9 @@ function buildCategoriesTabUI() {
         </div>
 
         <!-- Top locations: col 4-5 (title swaps by scope: Top Categories for all/parent, Top Locations for leaf) -->
-        <div class="col-span-2 bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col">
+        <div class="col-span-1 md:col-span-2 bg-white border border-neutral-200 rounded-lg shadow-sm flex flex-col">
           <div class="px-6 pt-6 pb-0 shrink-0">
-            <p id="dd-locations-title" class="font-semibold text-xl text-gray-900">Top Locations</p>
+            <p id="dd-locations-title" class="font-semibold text-xl text-neutral-900">Top Locations</p>
           </div>
           <div class="px-6 pt-4 pb-6">
             <div id="dd-locations" class="flex flex-col gap-3.5"></div>
@@ -1634,10 +2259,10 @@ function buildCategoriesTabUI() {
       </div>
 
       <!-- Row 3: full-width bubble chart -->
-      <div class="bg-white border border-gray-200 rounded-lg shadow-sm">
+      <div class="bg-white border border-neutral-200 rounded-lg shadow-sm">
         <div class="px-6 pt-6 pb-0 flex items-center justify-between">
-          <p id="dd-bubble-title" class="font-semibold text-xl text-gray-900"></p>
-          <div id="dd-bubble-legend" class="hidden flex items-center gap-4 text-xs text-gray-500"></div>
+          <p id="dd-bubble-title" class="font-semibold text-xl text-neutral-900"></p>
+          <div id="dd-bubble-legend" class="hidden flex items-center gap-4 text-xs text-neutral-500"></div>
         </div>
         <div class="px-6 pb-6 pt-4">
           <div id="dd-bubble" class="w-full" style="height:260px;overflow:hidden"></div>
@@ -1711,10 +2336,10 @@ function renderDrillDownView(data, compareData) {
   if (headerDot) {
     if (level === 'all') {
       headerDot.setAttribute('style', `background-color:var(--color-cat-default-bg);color:var(--color-cat-default-fg);`);
-      headerDot.innerHTML = `<span class="cat-emoji" style="margin-right:0">📊</span>`;
+      headerDot.innerHTML = `<span class="cat-emoji" aria-hidden="true" style="margin-right:0">📊</span>`;
     } else {
       headerDot.setAttribute('style', catChipStyle(headerName));
-      headerDot.innerHTML = `<span class="cat-emoji" style="margin-right:0">${catEmoji(headerName)}</span>`;
+      headerDot.innerHTML = `<span class="cat-emoji" aria-hidden="true" style="margin-right:0">${catEmoji(headerName)}</span>`;
     }
   }
   document.getElementById('dd-cat-name').textContent = headerName;
@@ -1734,8 +2359,8 @@ function renderDrillDownView(data, compareData) {
   if (bubTitle) bubTitle.textContent = `Transaction Bubbles — ${monthLabel}`;
 
   // Pick a primary color for the category being scoped (default-gray for 'all').
-  // 'all' scope drives the cumulative line + bubble color in brand indigo (accent-500).
-  const color = level === 'all' ? token('color-accent-500') : catHex(headerName);
+  // 'all' scope drives the cumulative line + bubble color in brand indigo (accent-700).
+  const color = level === 'all' ? token('color-accent-700') : catHex(headerName);
 
   renderDdPie(data, color);
   renderDdQuickStats(data, lensCompare ? compareData : null);
@@ -1772,7 +2397,7 @@ function renderDdPie(data, color) {
     if (titleEl) titleEl.textContent = `${data.category} — ${monthLabel}`;
     if (pieEl) {
       Plotly.purge('dd-pie');
-      pieEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-sm text-gray-400">No spending in ${monthLabel}</div>`;
+      pieEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-sm text-neutral-500">No spending in ${monthLabel}</div>`;
     }
     return;
   }
@@ -1830,11 +2455,12 @@ function renderDdPie(data, color) {
     marker: { colors },
     showlegend: false,
   }], {
-    ...PLOTLY_LAYOUT,
+    ...plotlyLayout(),
     margin: { t: 0, r: 0, b: 0, l: 0 },
     paper_bgcolor: 'transparent',
     plot_bgcolor:  'transparent',
   }, PLOTLY_CONFIG);
+  setChartA11y('dd-pie', `${data.category || 'All spending'} composition donut, ${labels.length} segment${labels.length !== 1 ? 's' : ''}`);
 
   // Click-to-drill on compositional pies: parent slices → drill into parent;
   // child slices → drill into leaf. "Other" rollup at all-scope is a no-op
@@ -1902,10 +2528,12 @@ function updateDdPieToggleUI(level, childCount) {
   const activeMode = compDisabled ? 'proportion' : ddPieMode;
 
   const setActive = (btn, isActive) => {
-    btn.classList.toggle('bg-accent-50',     isActive);
-    btn.classList.toggle('text-accent-700',  isActive);
-    btn.classList.toggle('text-gray-500',    !isActive);
-    btn.classList.toggle('hover:bg-gray-50', !isActive);
+    btn.classList.toggle('bg-neutral-100',   isActive);
+    btn.classList.toggle('text-neutral-900', isActive);
+    btn.classList.toggle('font-semibold',    isActive);
+    btn.classList.toggle('text-neutral-500',    !isActive);
+    btn.classList.toggle('hover:bg-neutral-50', !isActive);
+    btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   };
   setActive(propBtn, activeMode === 'proportion');
   setActive(compBtn, activeMode === 'composition');
@@ -1975,7 +2603,7 @@ function renderDdQuickStats(data, prevData) {
   stats.forEach(stat => {
     const card = document.createElement('div');
     // flex-1 so all three rows share equal height within the col-span-3 column
-    card.className = 'flex-1 bg-white rounded-lg border border-gray-200 shadow-sm flex items-center gap-5 px-5 py-4';
+    card.className = 'flex-1 bg-white rounded-lg border border-neutral-200 shadow-sm flex items-center gap-5 p-6';
 
     let badgeHtml = '';
     let subHtml   = '';
@@ -1984,21 +2612,23 @@ function renderDdQuickStats(data, prevData) {
       const pctChange = ((stat.value - stat.prev) / stat.prev) * 100;
       const up = pctChange > 0;
       const sign = up ? '+' : '';
-      const badgeColor = up ? 'text-rose-600 bg-rose-50' : 'text-emerald-600 bg-emerald-50';
+      const badgeColor = up
+        ? 'text-utility-red-700 bg-utility-red-50'
+        : 'text-utility-green-700 bg-utility-green-50';
       const arrow = up ? '↑' : '↓';
       badgeHtml = `<span class="inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded-full ${badgeColor}">${arrow} ${sign}${Math.abs(pctChange).toFixed(0)}%</span>`;
       const compareLabel = catCompareMonth ? formatMonthLabel(catCompareMonth) : 'prev';
-      subHtml = `<p class="text-xs text-gray-400 mt-0.5">vs ${escHtml(stat.fmtFn(stat.prev))} (${compareLabel})</p>`;
+      subHtml = `<p class="text-xs text-neutral-500 mt-0.5">vs ${escHtml(stat.fmtFn(stat.prev))} (${compareLabel})</p>`;
     }
 
     const descHtml = stat.desc
-      ? `<p class="text-xs text-gray-400 mt-0.5">${escHtml(stat.desc)}</p>`
+      ? `<p class="text-xs text-neutral-500 mt-0.5">${escHtml(stat.desc)}</p>`
       : '';
 
     card.innerHTML = `
-      <p class="font-sans font-bold text-3xl text-gray-900 tabular-nums tracking-tight shrink-0">${escHtml(String(stat.fmtFn(stat.value)))}</p>
+      <p class="font-sans font-bold text-3xl text-neutral-900 tabular-nums tracking-tight shrink-0">${escHtml(String(stat.fmtFn(stat.value)))}</p>
       <div class="flex flex-col min-w-0">
-        <p class="text-sm font-semibold text-gray-500">${stat.label}</p>
+        <p class="text-sm font-semibold text-neutral-500">${stat.label}</p>
         ${descHtml}
         ${badgeHtml}
         ${subHtml}
@@ -2012,7 +2642,7 @@ function renderDdLocations(locations, color, level = 'leaf') {
   const container = document.getElementById('dd-locations');
   container.innerHTML = '';
   if (!locations || !locations.length) {
-    container.innerHTML = '<p class="text-xs text-gray-400">No data</p>';
+    container.innerHTML = '<p class="text-xs text-neutral-500">No data</p>';
     return;
   }
   // For category-level rows (parent → children, all → parents) show colored chips;
@@ -2026,14 +2656,14 @@ function renderDdLocations(locations, color, level = 'leaf') {
       const chipStyle = isOther ? `background-color:var(--color-cat-default-bg);color:var(--color-cat-default-fg);` : catChipStyle(loc.name);
       const chipBody = isOther ? escHtml(loc.name) : catLabelHtml(loc.name);
       el.innerHTML = `
-        <span class="inline-flex items-center text-xs px-2 py-0.5 rounded-full whitespace-nowrap" style="${chipStyle}">${chipBody}</span>
-        <span class="text-gray-600 tabular-nums ml-auto shrink-0">${fmt(loc.total)}</span>
+        <span class="inline-flex items-center text-sm px-2.5 py-1 rounded-full whitespace-nowrap" style="${chipStyle}">${chipBody}</span>
+        <span class="text-neutral-600 tabular-nums ml-auto shrink-0">${fmt(loc.total)}</span>
       `;
     } else {
       // Leaf scope (merchant rows) — let names wrap naturally; no width clip.
       el.innerHTML = `
-        <span class="text-gray-700 font-medium" title="${escHtml(loc.name)}">${escHtml(loc.name)}</span>
-        <span class="text-gray-600 tabular-nums ml-2 shrink-0">${fmt(loc.total)}</span>
+        <span class="text-neutral-700 font-medium" title="${escHtml(loc.name)}">${escHtml(loc.name)}</span>
+        <span class="text-neutral-600 tabular-nums ml-2 shrink-0">${fmt(loc.total)}</span>
       `;
     }
     container.appendChild(el);
@@ -2069,27 +2699,28 @@ function renderDdCumulative(data, compareData, color) {
       name: formatMonthLabel(compareData.year_month),
       x: cDayLabels,
       y: compareData.cumulative_spend.map(d => d.cumulative),
-      line: { color: '#9ca3af', width: 2, dash: 'dot' },
+      line: { color: token('color-gray-400'), width: 2, dash: 'dot' },
       hoverinfo: 'none',
     });
   }
 
   Plotly.newPlot('dd-cumulative', traces, {
-    ...PLOTLY_LAYOUT,
+    ...plotlyLayout(),
     xaxis: {
-      tickfont: { size: 10 },
-      gridcolor: '#f3f4f6',
-      title: { text: 'Day of month', font: { size: 10 }, standoff: 4 },
+      tickfont: { size: 12 },
+      gridcolor: token('color-gray-100'),
+      title: { text: 'Day of month', font: { size: 12 }, standoff: 4 },
     },
     yaxis: {
       tickformat: '$,.0f',
-      tickfont: { size: 10 },
-      gridcolor: '#f3f4f6',
+      tickfont: { size: 12 },
+      gridcolor: token('color-gray-100'),
     },
     margin: { t: 8, r: 16, b: 44, l: 10 },
     showlegend: !!compareData,
-    legend: compareData ? { orientation: 'h', y: -0.35, font: { size: 10 } } : undefined,
+    legend: compareData ? { orientation: 'h', y: -0.35, font: { size: 12 } } : undefined,
   }, PLOTLY_CONFIG);
+  setChartA11y('dd-cumulative', `${data.category || 'All spending'} cumulative spend by day${compareData ? ', with prior-period overlay' : ''}`);
 
   const cumEl = document.getElementById('dd-cumulative');
   cumEl?.on('plotly_hover',   evt => showCustomTooltip(tipCumulHTML(evt), evt.event));
@@ -2117,7 +2748,7 @@ function renderDdBubble(data, compareData, color) {
 
   if (!txns || !txns.length) {
     document.getElementById('dd-bubble').innerHTML =
-      '<p class="text-xs text-gray-400 text-center pt-10">No transactions</p>';
+      '<p class="text-xs text-neutral-500 text-center pt-10">No transactions</p>';
     return;
   }
 
@@ -2167,7 +2798,7 @@ function renderDdBubble(data, compareData, color) {
           ${escHtml(formatMonthLabel(data.year_month))}
         </span>
         <span class="flex items-center gap-1.5">
-          <span class="inline-block w-2.5 h-2.5 rounded-full bg-gray-400" style="opacity:0.45"></span>
+          <span class="inline-block w-2.5 h-2.5 rounded-full bg-neutral-400" style="opacity:0.45"></span>
           ${escHtml(formatMonthLabel(compareData.year_month))}
         </span>
       `;
@@ -2199,7 +2830,7 @@ function renderDdBubble(data, compareData, color) {
       marker: {
         size:     comparePositions.map(p => p.size),
         sizemode: 'diameter',
-        color:    '#9ca3af',
+        color:    token('color-gray-400'),
         opacity:  0.45,
         line:     { color: 'rgba(255,255,255,0.7)', width: 1 },
       },
@@ -2244,14 +2875,14 @@ function renderDdBubble(data, compareData, color) {
   });
 
   Plotly.newPlot('dd-bubble', traces, {
-    ...PLOTLY_LAYOUT,
+    ...plotlyLayout(),
     xaxis: {
       range:     [0.5, daysInMonth + 0.5],
       tickmode:  'array',
       tickvals:  Array.from({ length: daysInMonth }, (_, i) => i + 1),
       ticktext:  Array.from({ length: daysInMonth }, (_, i) => `${MONTH_LABELS[mo - 1]} ${i + 1}`),
       tickfont:  { size: 10 },
-      gridcolor: '#f3f4f6',
+      gridcolor: token('color-gray-100'),
       title:     { text: '', standoff: 4 },
     },
     yaxis: {
@@ -2262,6 +2893,7 @@ function renderDdBubble(data, compareData, color) {
     margin:    { t: 28, r: 28, b: 44, l: 28 },
     hovermode: 'closest',
   }, PLOTLY_CONFIG);
+  setChartA11y('dd-bubble', `${data.category || 'All spending'} merchants by day, ${MONTH_LABELS[mo - 1]} ${yr}, bubble chart`);
 
   // Hover does three things in tandem:
   //   1. Show our custom DOM tooltip with merchant + date + amount
@@ -2275,7 +2907,7 @@ function renderDdBubble(data, compareData, color) {
     const idx = pt.customdata.origIndex;
 
     document.querySelectorAll('#dd-table-body tr').forEach(row => {
-      row.classList.toggle('bg-accent-50', Number(row.dataset.idx) === idx);
+      row.classList.toggle('bg-neutral-100', Number(row.dataset.idx) === idx);
     });
 
     const opacities = catBubblePositions.map(p => p.origIndex === idx ? 1.0 : 0.18);
@@ -2284,7 +2916,7 @@ function renderDdBubble(data, compareData, color) {
 
   document.getElementById('dd-bubble').on('plotly_unhover', () => {
     hideCustomTooltip();
-    document.querySelectorAll('#dd-table-body tr').forEach(r => r.classList.remove('bg-accent-50'));
+    document.querySelectorAll('#dd-table-body tr').forEach(r => r.classList.remove('bg-neutral-100'));
     if (catBubblePositions.length) {
       Plotly.restyle('dd-bubble', {
         'marker.opacity': [Array(catBubblePositions.length).fill(0.72)],
@@ -2334,12 +2966,12 @@ function renderDdTable(data, compareData) {
   // Build one self-contained card per panel
   function buildCard(txns, panelMonth, isPrimary) {
     const card = document.createElement('div');
-    card.className = 'bg-white border border-gray-200 rounded-lg shadow-sm';
+    card.className = 'bg-white border border-neutral-200 rounded-lg shadow-sm';
 
     // Card header
     const hdr = document.createElement('div');
     hdr.className = 'px-6 pt-6 pb-0';
-    hdr.innerHTML = `<p class="font-semibold text-xl text-gray-900">
+    hdr.innerHTML = `<p class="font-semibold text-xl text-neutral-900">
       ${hasCompare ? escHtml(formatMonthLabel(panelMonth)) : `All Transactions — ${escHtml(formatMonthLabel(panelMonth))}`}
     </p>`;
     card.appendChild(hdr);
@@ -2356,28 +2988,28 @@ function renderDdTable(data, compareData) {
     table.className = 'w-full text-sm';
     table.innerHTML = `
       <thead class="sticky top-0 bg-white">
-        <tr class="border-b border-gray-200">
-          <th class="pb-2 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Date</th>
-          <th class="pb-2 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Merchant</th>
-          <th class="pb-2 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide">Amount</th>
+        <tr class="border-b border-neutral-200">
+          <th class="pb-2 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Date</th>
+          <th class="pb-2 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Merchant</th>
+          <th class="pb-2 text-right text-xs font-semibold text-neutral-500 uppercase tracking-wide">Amount</th>
         </tr>
       </thead>`;
 
     const tbody = document.createElement('tbody');
-    tbody.className = 'divide-y divide-gray-50';
+    tbody.className = 'divide-y divide-neutral-50';
     if (isPrimary) tbody.id = 'dd-table-body';
 
     if (!txns.length) {
-      tbody.innerHTML = '<tr><td colspan="3" class="text-center text-xs text-gray-400 py-4">No transactions</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="3" class="text-center text-xs text-neutral-500 py-4">No transactions</td></tr>';
     } else {
       txns.forEach((t, i) => {
         const tr = document.createElement('tr');
-        tr.className = 'hover:bg-accent-50 transition-colors cursor-default';
+        tr.className = 'hover:bg-neutral-50 transition-colors cursor-default';
         if (isPrimary) tr.dataset.idx = i;
         tr.innerHTML = `
-          <td class="py-2 pr-3 text-xs text-gray-400 whitespace-nowrap">${t.date}</td>
-          <td class="py-2 pr-3 text-sm text-gray-700 font-medium truncate max-w-[110px]" title="${escHtml(t.name)}">${escHtml(t.name)}</td>
-          <td class="py-2 text-right text-sm text-gray-900 font-medium tabular-nums whitespace-nowrap">${fmt(t.amount)}</td>
+          <td class="py-2 pr-3 text-xs text-neutral-500 whitespace-nowrap">${t.date}</td>
+          <td class="py-2 pr-3 text-sm text-neutral-700 font-medium truncate max-w-[110px]" title="${escHtml(t.name)}">${escHtml(t.name)}</td>
+          <td class="py-2 text-right text-sm text-neutral-900 font-medium tabular-nums whitespace-nowrap">${fmt(t.amount)}</td>
         `;
 
         if (isPrimary) {
@@ -2498,15 +3130,15 @@ async function loadTransactions() {
 
   data.rows.forEach(row => {
     const tr = document.createElement('tr');
-    tr.className = 'hover:bg-gray-50 transition-colors';
+    tr.className = 'hover:bg-neutral-50 transition-colors';
     tr.innerHTML = `
-      <td class="px-4 py-3 text-gray-500 whitespace-nowrap">${formatTxnDate(row.date)}</td>
-      <td class="px-4 py-3 font-medium text-gray-800 max-w-xs truncate">${escHtml(row.name)}</td>
-      <td class="px-4 py-3 text-gray-500 hidden sm:table-cell">
-        <span class="inline-block text-xs px-2 py-0.5 rounded-full" style="${catChipStyle(row.category)}">${catLabelHtml(row.category)}</span>
+      <td class="px-4 py-3 text-neutral-500 whitespace-nowrap">${formatTxnDate(row.date)}</td>
+      <td class="px-4 py-3 font-medium text-neutral-800 max-w-xs truncate">${escHtml(row.name)}</td>
+      <td class="px-4 py-3 text-neutral-500 hidden sm:table-cell">
+        <span class="inline-block text-sm px-2.5 py-1 rounded-full" style="${catChipStyle(row.category)}">${catLabelHtml(row.category)}</span>
       </td>
-      <td class="px-4 py-3 text-gray-500 hidden md:table-cell text-xs">${escHtml(row.account)}</td>
-      <td class="px-4 py-3 text-right font-medium text-gray-800 whitespace-nowrap">${fmt(row.amount)}</td>
+      <td class="px-4 py-3 text-neutral-500 hidden md:table-cell text-xs">${escHtml(row.account)}</td>
+      <td class="px-4 py-3 text-right font-medium text-neutral-800 whitespace-nowrap">${fmt(row.amount)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -2521,257 +3153,50 @@ async function loadTransactions() {
   document.getElementById('txn-next').disabled = txnPage >= totalPages;
 }
 
-// ── Radial ────────────────────────────────────────────────────────────────────
+// ── Radial chart constants ───────────────────────────────────────────────────
+// Used by renderHabitsRadial (above). MONTH_LABELS doubles as theta tick
+// labels for the polar chart and as the lookup table for click-to-month
+// resolution via MONTH_NUM (defined later).
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DOW_LABELS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
-const RADIAL_COLORS = ['#3b82f6','#f97316','#6366f1','#10b981','#f43f5e','#eab308'];
-const GREY_LINE = '#d1d5db';
-const GREY_FILL = '#d1d5db22';
-
-let radialInited = false;
-let radialAllData = {};
-let selectedRadialYears = new Set();
-let activeRadialYear = null;
-let activeRadialPointIndex = null;
-
-async function renderRadialTab() {
-  if (!radialInited) {
-    const cats = await fetch('/api/categories/list').then(r => r.json());
-    const catSel = document.getElementById('radial-cat-select');
-    cats.forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c; opt.textContent = c;
-      catSel.appendChild(opt);
-    });
-    catSel.addEventListener('change', async () => {
-      if (activeRadialYear) closeTxnPanel();
-      await fetchRadialData();
-      buildYearCheckboxes();
-      loadRadialChart();
-    });
-
-    const btn   = document.getElementById('radial-year-btn');
-    const panel = document.getElementById('radial-year-panel');
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      panel.classList.toggle('hidden');
-    });
-    document.addEventListener('click', e => {
-      if (!document.getElementById('radial-year-dropdown').contains(e.target)) {
-        panel.classList.add('hidden');
-      }
-    });
-
-    radialInited = true;
+// Radial chart palette — six year-over-year rings. Resolved lazily so the CSS
+// custom-property tokens (style.css :root) are the single source of truth.
+let _radialColors = null;
+function radialColors() {
+  if (!_radialColors) {
+    _radialColors = [
+      token('color-radial-0'), token('color-radial-1'), token('color-radial-2'),
+      token('color-radial-3'), token('color-radial-4'), token('color-radial-5'),
+    ];
   }
-  await fetchRadialData();
-  buildYearCheckboxes();
-  loadRadialChart();
+  return _radialColors;
 }
 
-async function fetchRadialData() {
-  const cat = document.getElementById('radial-cat-select').value;
-  const url = cat ? `/api/radial?category=${encodeURIComponent(cat)}` : '/api/radial';
-  radialAllData = await fetch(url).then(r => r.json());
-  selectedRadialYears = new Set(Object.keys(radialAllData).sort());
-}
-
-function buildYearCheckboxes() {
-  const panel = document.getElementById('radial-year-panel');
-  panel.innerHTML = '';
-  Object.keys(radialAllData).sort().forEach(year => {
-    const label = document.createElement('label');
-    label.className = 'flex items-center gap-2.5 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox';
-    cb.value = year;
-    cb.checked = selectedRadialYears.has(year);
-    cb.className = 'accent-indigo-500 w-3.5 h-3.5';
-    cb.addEventListener('change', () => {
-      if (cb.checked) selectedRadialYears.add(year);
-      else {
-        selectedRadialYears.delete(year);
-        if (activeRadialYear === year) closeTxnPanel();
-      }
-      updateYearLabel();
-      loadRadialChart();
-    });
-    label.appendChild(cb);
-    label.appendChild(document.createTextNode(year));
-    panel.appendChild(label);
-  });
-  updateYearLabel();
-}
-
-function updateYearLabel() {
-  const all = Object.keys(radialAllData).sort();
-  const sel = [...selectedRadialYears].sort();
-  const label = document.getElementById('radial-year-label');
-  if (sel.length === 0 || sel.length === all.length) label.textContent = 'All years';
-  else if (sel.length === 1) label.textContent = sel[0];
-  else label.textContent = `${sel.length} years`;
-}
-
-function loadRadialChart() {
-  const allYears = Object.keys(radialAllData).sort();
-  const years = allYears.filter(y => selectedRadialYears.has(y));
-  const theta = [...MONTH_LABELS, 'Jan'];
-
-  // Fill-only traces first (so they never cover markers)
-  const fillTraces = years.map(year => {
-    const colorIdx = allYears.indexOf(year);
-    const r = [...radialAllData[year], radialAllData[year][0]];
-    return {
-      type: 'scatterpolar',
-      name: year,
-      r,
-      theta,
-      fill: 'toself',
-      fillcolor: RADIAL_COLORS[colorIdx % RADIAL_COLORS.length] + '22',
-      mode: 'none',
-      showlegend: false,
-      hoverinfo: 'skip',
-    };
-  });
-
-  // Line+marker traces on top
-  const lineTraces = years.map(year => {
-    const colorIdx = allYears.indexOf(year);
-    const r = [...radialAllData[year], radialAllData[year][0]];
-    return {
-      type: 'scatterpolar',
-      name: year,
-      r,
-      theta,
-      fill: 'none',
-      mode: 'lines+markers',
-      line:   { color: RADIAL_COLORS[colorIdx % RADIAL_COLORS.length], width: 2 },
-      marker: { color: RADIAL_COLORS[colorIdx % RADIAL_COLORS.length], size: 5 },
-      hoverinfo: 'none',
-    };
-  });
-
-  hideCustomTooltip();
-  Plotly.newPlot('chart-radial', [...fillTraces, ...lineTraces], {
-    ...PLOTLY_LAYOUT,
-    polar: {
-      bgcolor: '#ffffff',
-      angularaxis: {
-        tickfont: { size: 12, family: 'Inter, ui-sans-serif, system-ui, sans-serif' },
-        direction: 'clockwise',
-        rotation: 90,
-        gridcolor: '#e5e7eb',
-        linecolor: '#e5e7eb',
-      },
-      radialaxis: {
-        showticklabels: false,
-        ticks: '',
-        gridcolor: '#f3f4f6',
-        linecolor: '#e5e7eb',
-        angle: 90,
-      },
-    },
-    legend: {
-      orientation: 'h',
-      y: -0.08,
-      x: 0.5,
-      xanchor: 'center',
-      font: { size: 12 },
-      itemclick: false,
-      itemdoubleclick: false,
-    },
-    margin: { t: 20, r: 40, b: 60, l: 40 },
-  }, PLOTLY_CONFIG);
-
-  const radialEl = document.getElementById('chart-radial');
-  radialEl.on('plotly_hover',   evt => showCustomTooltip(tipRadialHTML(evt), evt.event));
-  radialEl.on('plotly_unhover', () => hideCustomTooltip());
-
-  document.getElementById('chart-radial').on('plotly_click', pointData => {
-    const pt = pointData.points[0];
-    if (pt.curveNumber < years.length) return;
-    const monthLabel = pt.theta === 'Jan' && pt.pointIndex === 12 ? 'Jan' : pt.theta;
-    const monthNum   = MONTH_NUM[monthLabel];
-    if (!monthNum) return;
-    const year      = pt.data.name;
-    const yearMonth = `${year}-${String(monthNum).padStart(2, '0')}`;
-    const category  = document.getElementById('radial-cat-select').value;
-    const panelOpen = document.getElementById('txn-panel').classList.contains('panel-open');
-
-    if (panelOpen && activeRadialYear === year && activeRadialPointIndex === pt.pointIndex) {
-      closeTxnPanel();
-    } else {
-      activeRadialYear = year;
-      activeRadialPointIndex = pt.pointIndex;
-      highlightRadialYear(year, pt.pointIndex);
-      openTxnPanel(yearMonth, category);
-    }
-  });
-}
-
-function highlightRadialYear(year, pointIndex = null) {
-  const allYears = Object.keys(radialAllData).sort();
-  const visible  = allYears.filter(y => selectedRadialYears.has(y));
-  const n        = visible.length;
-  const numPoints = 13;
-
-  const fillColors = visible.map(y => {
-    const idx = allYears.indexOf(y);
-    return y === year ? RADIAL_COLORS[idx % RADIAL_COLORS.length] + '22' : GREY_FILL;
-  });
-  Plotly.restyle('chart-radial', { fillcolor: fillColors }, visible.map((_, i) => i));
-
-  const activeVisibleIdx = visible.indexOf(year);
-  const activeTraceIdx   = n + activeVisibleIdx;
-  const activeColor      = RADIAL_COLORS[allYears.indexOf(year) % RADIAL_COLORS.length];
-  const activeSizes      = Array.from({ length: numPoints }, (_, i) => i === pointIndex ? 16 : 0);
-
-  Plotly.restyle('chart-radial',
-    { 'line.color': [activeColor], 'marker.color': [activeColor], 'marker.size': [activeSizes] },
-    [activeTraceIdx]
-  );
-
-  const inactiveIndices = visible.map((_, i) => i + n).filter(i => i !== activeTraceIdx);
-  if (inactiveIndices.length) {
-    Plotly.restyle('chart-radial',
-      { 'line.color': GREY_LINE, 'marker.color': GREY_LINE, 'marker.size': Array(numPoints).fill(0) },
-      inactiveIndices
-    );
-  }
-}
-
-function resetRadialColors() {
-  if (!radialAllData || Object.keys(radialAllData).length === 0) return;
-  const allYears = Object.keys(radialAllData).sort();
-  const visible  = allYears.filter(y => selectedRadialYears.has(y));
-  const n        = visible.length;
-  const fillColors = visible.map(y => RADIAL_COLORS[allYears.indexOf(y) % RADIAL_COLORS.length] + '22');
-  const lineColors = visible.map(y => RADIAL_COLORS[allYears.indexOf(y) % RADIAL_COLORS.length]);
-
-  Plotly.restyle('chart-radial', { fillcolor: fillColors }, visible.map((_, i) => i));
-  Plotly.restyle('chart-radial', {
-    'line.color':   lineColors,
-    'marker.color': lineColors,
-    'marker.size':  5,
-  }, visible.map((_, i) => i + n));
-}
 
 // ── Transaction side panel ────────────────────────────────────────────────────
+// Dormant: kept in place for a future "transaction detail" surface. The radial
+// chart no longer opens this panel — clicks on radial nodes flow through
+// setLensMonth + the in-page drill-down instead. openTxnPanel is unreferenced
+// today; the close-button listener still runs (no-op when the panel is hidden).
 const MONTH_NUM = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
+
+let _txnPanelOpener = null;
 
 function openTxnPanel(yearMonth, category) {
   const panel = document.getElementById('txn-panel');
+  // Capture the element that had focus when the panel opened so we can
+  // restore it on close.
+  _txnPanelOpener = document.activeElement && document.activeElement !== document.body
+    ? document.activeElement
+    : document.body;
 
   const [year, mon] = yearMonth.split('-');
   const monthName = MONTH_LABELS[parseInt(mon, 10) - 1];
   document.getElementById('txn-panel-title').textContent = category || 'All spending';
   document.getElementById('txn-panel-meta').textContent  = `${monthName} ${year}`;
 
-  const allYears  = Object.keys(radialAllData).sort();
-  const colorIdx  = allYears.indexOf(year);
-  const yearColor = colorIdx >= 0 ? RADIAL_COLORS[colorIdx % RADIAL_COLORS.length] : '#6366f1';
-  document.getElementById('txn-panel-color-dot').style.backgroundColor = yearColor;
+  document.getElementById('txn-panel-color-dot').style.backgroundColor = token('color-accent-700');
 
   document.getElementById('txn-panel-tbody').innerHTML = '';
   document.getElementById('txn-panel-empty').classList.add('hidden');
@@ -2780,6 +3205,10 @@ function openTxnPanel(yearMonth, category) {
   document.getElementById('txn-panel-total').textContent = '';
 
   panel.classList.add('panel-open');
+  // Move focus into the panel so keyboard users land on the close button as
+  // soon as the slide-in finishes. setTimeout keeps focus from triggering
+  // the layout transition's :focus-visible flash mid-animation.
+  setTimeout(() => document.getElementById('txn-panel-close')?.focus(), 50);
 
   const params = new URLSearchParams({ year_month: yearMonth, per_page: 500, page: 1 });
   if (category) params.set('category', category);
@@ -2804,11 +3233,11 @@ function populateTxnPanel(data) {
   data.rows.forEach(row => {
     total += row.amount;
     const tr = document.createElement('tr');
-    tr.className = 'hover:bg-gray-50 transition-colors';
+    tr.className = 'hover:bg-neutral-50 transition-colors';
     tr.innerHTML = `
-      <td class="px-5 py-3 text-gray-400 whitespace-nowrap text-xs">${row.date}</td>
-      <td class="px-5 py-3 text-gray-800 font-medium max-w-[180px] truncate">${escHtml(row.name)}</td>
-      <td class="px-5 py-3 text-right text-gray-800 font-medium whitespace-nowrap">${fmt(row.amount)}</td>
+      <td class="px-5 py-3 text-neutral-500 whitespace-nowrap text-xs">${row.date}</td>
+      <td class="px-5 py-3 text-neutral-800 font-medium max-w-[180px] truncate">${escHtml(row.name)}</td>
+      <td class="px-5 py-3 text-right text-neutral-800 font-medium whitespace-nowrap">${fmt(row.amount)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -2821,14 +3250,20 @@ function populateTxnPanel(data) {
 
 function closeTxnPanel() {
   document.getElementById('txn-panel').classList.remove('panel-open');
-  if (activeRadialYear) {
-    activeRadialYear = null;
-    activeRadialPointIndex = null;
-    resetRadialColors();
+  // Restore keyboard focus to whatever opened the panel.
+  if (_txnPanelOpener && document.contains(_txnPanelOpener)) {
+    _txnPanelOpener.focus({ preventScroll: true });
   }
+  _txnPanelOpener = null;
 }
 
 document.getElementById('txn-panel-close').addEventListener('click', closeTxnPanel);
+// Escape closes the panel from anywhere when it's open.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const panel = document.getElementById('txn-panel');
+  if (panel?.classList.contains('panel-open')) closeTxnPanel();
+});
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function debounce(fn, ms) {

@@ -382,13 +382,22 @@ def get_summary_stats(
     }
 
 
-def get_radial_data(category: Optional[str] = None) -> dict:
+def get_radial_data(
+    category: Optional[str] = None,
+    parent: Optional[str] = None,
+) -> dict:
     """Return monthly spending by calendar year for a radar chart.
 
     Returns {year_str: [jan, feb, ..., dec]} — 12 floats each, 0 where no data.
+
+    `parent` filters to all leaves under one parent group (mirrors the
+    /api/monthly param). `category` filters to a single leaf. `parent` wins
+    when both are passed.
     """
     df = load_data()
-    if category:
+    if parent:
+        df = df[df["parent_category"] == parent]
+    elif category:
         df = df[df["category_norm"] == category]
 
     df = df.copy()

@@ -19,47 +19,50 @@
   <!-- App styles -->
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
-<body class="bg-gray-50 text-gray-900 font-sans antialiased h-full flex flex-col overflow-hidden">
+<body class="bg-neutral-50 text-neutral-900 font-sans antialiased h-full flex flex-col overflow-hidden">
 
   <!-- Top nav -->
-  <header class="bg-white border-b border-gray-200 shrink-0 z-20">
+  <header class="bg-white border-b border-neutral-200 shrink-0 z-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
-      <span class="font-semibold text-gray-800 tracking-tight">MoneyHabits</span>
+      <button id="brand-home-btn" type="button"
+        class="font-semibold text-neutral-800 tracking-tight cursor-pointer hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-md">
+        MoneyHabits
+      </button>
 
       <div class="flex items-center gap-3">
-        <nav class="flex gap-1" id="tab-nav">
-          <button data-tab="overview"      class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Overview</button>
-          <button data-tab="habits"        class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Habits</button>
-          <button data-tab="transactions"  class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors">Transactions</button>
+        <nav class="flex gap-1" id="tab-nav" role="tablist" aria-label="Main sections">
+          <button data-tab="overview"     id="tab-overview"     type="button" role="tab" aria-selected="true"  aria-controls="section-overview"     tabindex="0"  class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700">Overview</button>
+          <button data-tab="habits"       id="tab-habits"       type="button" role="tab" aria-selected="false" aria-controls="section-habits"       tabindex="-1" class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700">Habits</button>
+          <button data-tab="transactions" id="tab-transactions" type="button" role="tab" aria-selected="false" aria-controls="section-transactions" tabindex="-1" class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700">Transactions</button>
         </nav>
 
         <div class="relative" id="dataset-switcher">
           <button id="dataset-switcher-btn" type="button"
-            class="flex items-center gap-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-md px-3 py-1.5 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-accent-500">
+            class="flex items-center gap-2 text-sm font-medium text-neutral-700 border border-neutral-200 rounded-md px-3 py-1.5 bg-white hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-accent-700">
             <span id="dataset-switcher-label">…</span>
-            <svg class="w-3.5 h-3.5 text-gray-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+            <svg class="w-3.5 h-3.5 text-neutral-400 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
               <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"/>
             </svg>
           </button>
           <div id="dataset-switcher-panel"
-            class="hidden absolute right-0 z-20 mt-1 min-w-[14rem] bg-white border border-gray-200 rounded-xl shadow-lg py-1"></div>
+            class="hidden absolute right-0 z-20 mt-1 min-w-[14rem] bg-white border border-neutral-200 rounded-xl shadow-lg py-1"></div>
         </div>
       </div>
     </div>
   </header>
 
   <!-- Secondary nav: active page title + supporting info -->
-  <div class="bg-white border-b border-gray-200 shrink-0 z-10">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-4">
+  <div class="bg-white border-b border-neutral-200 shrink-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
       <div class="relative inline-block">
-        <h1 id="page-title" class="text-3xl font-semibold tracking-tight text-gray-900">This Month's Snapshot</h1>
+        <h1 id="page-title" class="text-3xl font-semibold tracking-tight text-neutral-900">Overview</h1>
         <!-- Habits-only category chip dropdown (anchored under the heading) -->
         <div id="hc-chip-panel"
-             class="hidden absolute left-0 mt-2 min-w-[18rem] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-2">
+             class="hidden absolute left-0 mt-2 min-w-[18rem] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto bg-white border border-neutral-200 rounded-xl shadow-lg z-30 py-2">
           <div id="hc-cat-panel-list" class="p-2"></div>
         </div>
       </div>
-      <p id="page-subtitle" class="text-sm text-gray-600 mt-1">&nbsp;</p>
+      <p id="page-subtitle" class="text-sm text-neutral-600 mt-1">&nbsp;</p>
     </div>
   </div>
 
@@ -73,50 +76,51 @@
     </main>
 
     <!-- Transaction side panel — pushed layout, 33vw when open -->
-    <aside id="txn-panel" class="shrink-0 overflow-hidden border-l border-gray-200 bg-white flex flex-col">
+    <aside id="txn-panel" aria-label="Transaction details" class="shrink-0 overflow-hidden border-l border-neutral-200 bg-white flex flex-col">
       <div class="txn-panel-inner h-full flex flex-col">
 
         <!-- Header -->
-        <div class="flex items-start justify-between px-5 py-4 border-b border-gray-100 shrink-0">
+        <div class="flex items-start justify-between px-5 py-4 border-b border-neutral-100 shrink-0">
           <div>
-            <p id="txn-panel-title" class="font-semibold text-gray-900 text-sm"></p>
+            <p id="txn-panel-title" class="font-semibold text-neutral-900 text-sm"></p>
             <div class="flex items-center gap-1.5 mt-0.5">
               <span id="txn-panel-color-dot" class="inline-block w-2 h-2 rounded-full shrink-0"></span>
-              <p id="txn-panel-meta" class="text-xs text-gray-400"></p>
+              <p id="txn-panel-meta" class="text-xs text-neutral-500"></p>
             </div>
           </div>
-          <button id="txn-panel-close" class="ml-4 mt-0.5 text-gray-400 hover:text-gray-600 transition-colors">
-            <svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+          <button id="txn-panel-close" type="button" aria-label="Close transaction panel"
+            class="ml-2 -mt-1 -mr-1 p-2 text-neutral-500 hover:text-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700 rounded">
+            <svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
               <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
             </svg>
           </button>
         </div>
 
         <!-- Callout total -->
-        <div class="px-5 pt-5 pb-4 border-b border-gray-100 shrink-0">
-          <p id="txn-panel-callout" class="text-3xl font-bold text-gray-900 tabular-nums tracking-tight"></p>
-          <p class="text-xs text-gray-400 mt-1">total spent</p>
+        <div class="px-5 pt-5 pb-4 border-b border-neutral-100 shrink-0">
+          <p id="txn-panel-callout" class="text-3xl font-bold text-neutral-900 tabular-nums tracking-tight"></p>
+          <p class="text-xs text-neutral-500 mt-1">total spent</p>
         </div>
 
         <!-- Table -->
         <div class="overflow-y-auto flex-1">
           <table class="w-full text-sm">
-            <thead class="sticky top-0 bg-white border-b border-gray-100">
+            <thead class="sticky top-0 bg-white border-b border-neutral-100">
               <tr>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Date</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Merchant</th>
-                <th class="px-5 py-2.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide">Amount</th>
+                <th class="px-5 py-2.5 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Date</th>
+                <th class="px-5 py-2.5 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Merchant</th>
+                <th class="px-5 py-2.5 text-right text-xs font-semibold text-neutral-500 uppercase tracking-wide">Amount</th>
               </tr>
             </thead>
-            <tbody id="txn-panel-tbody" class="divide-y divide-gray-50"></tbody>
+            <tbody id="txn-panel-tbody" class="divide-y divide-neutral-50"></tbody>
           </table>
-          <p id="txn-panel-empty" class="hidden text-center text-sm text-gray-400 py-12">No transactions found.</p>
+          <p id="txn-panel-empty" class="hidden text-center text-sm text-neutral-500 py-12">No transactions found.</p>
         </div>
 
         <!-- Footer -->
-        <div class="px-5 py-3 border-t border-gray-100 shrink-0 flex justify-between items-center">
-          <span class="text-xs text-gray-400" id="txn-panel-count"></span>
-          <span class="text-sm font-semibold text-gray-800" id="txn-panel-total"></span>
+        <div class="px-5 py-3 border-t border-neutral-100 shrink-0 flex justify-between items-center">
+          <span class="text-xs text-neutral-500" id="txn-panel-count"></span>
+          <span class="text-sm font-semibold text-neutral-800" id="txn-panel-total"></span>
         </div>
 
       </div>

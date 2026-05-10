@@ -69,7 +69,8 @@ def api_transactions():
 @app.route("/api/radial")
 def api_radial():
     category = request.args.get("category", "")
-    return jsonify(dp.get_radial_data(category or None))
+    parent   = request.args.get("parent", "")
+    return jsonify(dp.get_radial_data(category or None, parent=parent or None))
 
 
 @app.route("/api/category-detail")
