@@ -1,6 +1,4 @@
-# Personal data
-# NOTE: remove these lines when committing synthetic persona CSVs to a public repo
-datasets/*.csv
+# Runtime state — per-deployment, never commit
 .active-dataset
 
 # Python
