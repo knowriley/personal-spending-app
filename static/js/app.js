@@ -2132,15 +2132,22 @@ async function renderHabitsRadial() {
     scrollToDrilldown();
   });
 
-  // Hover → custom tooltip + dim the other rings to spotlight the hovered year.
+  // Hover → custom tooltip + dim the other rings to spotlight the hovered year
+  // + enlarge the hovered month's dot (matches the cumulative charts' tracker).
   radialEl.on('plotly_hover', evt => {
     showCustomTooltip(tipRadialHTML(evt), evt.event);
     const pt = evt.points?.[0];
     if (pt?.data?.name) applyRadialHighlight(pt.data.name);
+    if (pt && pt.pointNumber != null && pt.curveNumber != null) {
+      const sizes = Array(12).fill(5);
+      sizes[pt.pointNumber] = 10;
+      Plotly.restyle(radialEl, { 'marker.size': [sizes] }, [pt.curveNumber]);
+    }
   });
   radialEl.on('plotly_unhover', () => {
     hideCustomTooltip();
     applyRadialHighlight();   // falls back to the pinned year (if any)
+    Plotly.restyle(radialEl, { 'marker.size': 5 });
   });
 
   // Initial paint: respect any pre-existing pin.
@@ -2243,10 +2250,17 @@ function formatBubbleDate(ymd) {
 // as --color-cat-{slug}-{bg|fg|mid}. Children inherit their parent's slug
 // via /api/category-meta + catSlug() below.
 const PARENT_SLUG = {
-  'Food & Drink':    'food',
-  'Personal Care':   'personal',
-  'Car & Transport': 'car',
-  'Shopping':        'shopping',
+  'Food & Drink':    'food',       // orange
+  'Personal Care':   'personal',   // pink
+  'Car & Transport': 'car',        // blue (legacy Copilot naming)
+  'Transportation':  'car',        // blue
+  'Shopping':        'shopping',   // emerald
+  'Housing':         'apartment',  // amber
+  'Utilities':       'utilities',  // cyan
+  'Health':          'health',     // red
+  'Entertainment':   'fun',        // purple
+  'Debt':            'loans',      // green
+  'Other':           'other',      // gray
 };
 const ORPHAN_SLUG = {
   'Rent':                       'rent',
@@ -2320,9 +2334,12 @@ function loadCategoryMeta() {
 function catSlug(catNorm) {
   if (!catNorm || catNorm === 'Uncategorized') return 'default';
   if (PARENT_SLUG[catNorm]) return PARENT_SLUG[catNorm];
-  if (ORPHAN_SLUG[catNorm]) return ORPHAN_SLUG[catNorm];
+  // Prefer the parent-group color over ORPHAN_SLUG so leaves visually cluster
+  // under their parent. ORPHAN_SLUG is the fallback for true orphans (leaves
+  // with no parent in the CSV).
   const parent = _catMeta?.find(r => r.category === catNorm)?.parent;
   if (parent && PARENT_SLUG[parent]) return PARENT_SLUG[parent];
+  if (ORPHAN_SLUG[catNorm]) return ORPHAN_SLUG[catNorm];
   return 'default';
 }
 
@@ -2356,7 +2373,7 @@ function buildCategoriesTabUI() {
 
   // Drill-down skeleton — content is filled in by renderDrillDown().
   ddSec.innerHTML = `
-    <div id="dd-inner" class="bg-white border border-neutral-200 rounded-lg p-6 flex flex-col gap-6 shadow-xl">
+    <div id="dd-inner" class="bg-white border border-neutral-200 rounded-lg p-6 flex flex-col gap-6">
 
       <!-- Header -->
       <div class="flex items-center justify-between gap-3">
@@ -3218,7 +3235,7 @@ function renderDdTable(data, compareData) {
         tr.className = 'hover:bg-neutral-50 transition-colors cursor-default';
         if (isPrimary) tr.dataset.idx = i;
         const categoryCell = showCategory
-          ? `<td class="py-2 pr-3"><span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full whitespace-nowrap" style="${catChipStyle(t.category || 'Uncategorized')}">${catLabelHtml(t.category || 'Uncategorized')}</span></td>`
+          ? `<td class="py-2 pr-3"><span class="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full whitespace-nowrap" style="${catChipStyle(t.category || 'Uncategorized')}">${catLabelHtml(t.category || 'Uncategorized')}</span></td>`
           : '';
         tr.innerHTML = `
           <td class="py-2 pr-3 text-xs text-neutral-500 whitespace-nowrap">${t.date}</td>

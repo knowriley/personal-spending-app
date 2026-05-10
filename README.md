@@ -21,7 +21,7 @@ Open `http://localhost:5001`. The dev server uses `livereload` and watches `temp
 
 The UI has three top-level tabs, picked by the secondary nav under the title bar:
 
-- **Overview** (default) — a month-at-a-glance summary: four equal-weight cards with this-month spend, last-month comparison, trailing 3-month average, and a budget bar showing income vs. spending. Plus a cumulative line chart that overlays this month against last month.
+- **Overview** (default) — a month-at-a-glance summary: four equal-weight cards with this-month spend, last-month comparison, trailing 3-month average, and a horizontal bar comparing this month's income to spending. Plus a cumulative line chart that overlays this month against last month.
 - **Habits** — the deep-dive surface. KPI strip + a scope-aware trend chart (bar or year-over-year radial) + a drill-down panel for the focused month. Scope can be all-spending, a parent group, or a single leaf category; switching scope re-renders KPIs, chart, and drill-down atomically. The trend chart's timeframe (3-month, 6-month, 12-month, YTD, all-time) is independent from the focused month, so you can pan the chart without losing your drill-down context.
 - **Transactions** — a filterable, paginated transaction table with search, category, parent-group, and month filters. Cross-tab linkouts (e.g. clicking "this time last month" on Overview) pre-populate filters here.
 
@@ -58,7 +58,7 @@ The header has a **dataset switcher** (top right) for swapping between the bundl
 
 ## Architecture in one paragraph
 
-`app.py` is a thin routing layer; every endpoint forwards to `data_processor.py`, which lazily builds two cached pandas DataFrames from the active dataset's CSV — `_df` (spending only) and `_df_full` (spending + income, for the budget bars). The frontend (`static/js/app.js`) calls those JSON endpoints, keeps lens state in module-scoped variables, and renders charts with Plotly using CSS custom properties as the color source (no hardcoded hex). Tabs are lazy-initialized on first activation.
+`app.py` is a thin routing layer; every endpoint forwards to `data_processor.py`, which lazily builds two cached pandas DataFrames from the active dataset's CSV — `_df` (spending only) and `_df_full` (spending + income, for the Overview income-vs-spending bar). The frontend (`static/js/app.js`) calls those JSON endpoints, keeps lens state in module-scoped variables, and renders charts with Plotly using CSS custom properties as the color source (no hardcoded hex). Tabs are lazy-initialized on first activation.
 
 Read **[`CLAUDE.md`](./CLAUDE.md)** before making non-trivial changes — it covers tab lifecycles, lens state, the category color/emoji system, cross-tab navigation, and Tailwind rebuild rules.
 
@@ -121,7 +121,7 @@ All endpoints return JSON. For request parameters and response shapes, see the i
 | `GET /api/radial` | Year-over-year monthly spend, 12 floats per year |
 | `GET /api/transactions` | Filterable, paginated transaction list (50/page) |
 | `GET /api/overview/snapshot` | Overview tab — MTD totals, comparisons, cumulative arrays |
-| `GET /api/overview/budget` | Income vs. spending bars for the Overview tab |
-| `GET /api/overview/budget/months` | Months that have income or spending activity |
+| `GET /api/overview/budget` | _Reserved for future use._ Income-vs-spending bar data — not currently consumed by the frontend |
+| `GET /api/overview/budget/months` | _Reserved for future use._ Months with income or spending activity — not currently consumed by the frontend |
 | `GET /api/datasets` | Available personas, with active flag |
 | `POST /api/datasets/active` | Switch active dataset; clears caches |
