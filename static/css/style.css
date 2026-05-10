@@ -293,7 +293,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   font-size: 13px;
   line-height: 1.25;
 }
-.ct-tip-meta  { font-size: 11px; color: #6b7280; margin-top: 2px; }   /* gray-500 */
+.ct-tip-meta  { font-size: 13px; color: #6b7280; margin-top: 2px; }   /* gray-500 */
 .ct-tip-value { font-size: 18px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
 .ct-tip-row   { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; font-size: 12px; }
 .ct-tip-row .lbl { color: #6b7280; }
@@ -332,10 +332,41 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   z-index: 30;
 }
 
+/* Right-aligned variant for triggers near the viewport's right edge — bubble
+   anchors its right edge to the trigger and extends leftward instead of
+   centering (which would overflow the page). Arrow flips to align with the
+   trigger as well. */
+.info-tt-bubble--right {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+.info-tt-bubble--right::before,
+.info-tt-bubble--right::after {
+  left: auto;
+  right: 0.375rem;
+  transform: none;
+}
+
 .info-tt:hover .info-tt-bubble,
 .info-tt:focus-within .info-tt-bubble {
   opacity: 1;
 }
+
+/* Lift any Overview card whose tooltip is open above its sibling cards.
+   Cards are static-positioned by default, so later siblings paint on top
+   regardless of the tooltip's z-index — this `:has()` rule promotes the
+   active card to its own stacking context only while the tooltip is shown. */
+#section-overview .grid > div { position: relative; }
+#section-overview .grid > div:has(.info-tt:hover),
+#section-overview .grid > div:has(.info-tt:focus-within) {
+  z-index: 50;
+}
+
+/* Make Plotly legend pills feel clickable. The Habits monthly chart wires
+   plotly_legendclick to drill the lens scope, so a pointer cursor signals
+   the affordance. */
+#chart-monthly .legendtoggle { cursor: pointer; }
 
 /* Two-layer arrow: the outer ::before draws the border-color tip, the inner
    ::after draws the white fill 1px above it so the bubble's 1px border
