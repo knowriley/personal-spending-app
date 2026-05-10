@@ -15,7 +15,7 @@ The app runs at `http://localhost:5001` in debug mode.
 
 **Flask backend (`app.py`)** — thin routing layer. All business logic lives in `data_processor.py`.
 
-**Data layer (`data_processor.py`)** — two cached module-level DataFrames, both lazily loaded on first access. The CSV path resolves through `get_active_dataset()` against the `DATASETS` registry — see "Datasets" below.
+**Data layer (`data_processor.py`)** — two cached module-level DataFrames, both lazily loaded on first access. The CSV path resolves through `get_active_dataset()` against the `DATASETS` registry — see "Datasets" below. A full walkthrough of the CSV → frame pipeline (filters, derived columns, per-request derivations) lives in [`DATA-PIPELINE.md`](./DATA-PIPELINE.md).
 - `_df` (via `load_data()`) — "spending only" frame used by every existing tab. Filters to `type == "regular"`, `excluded != true`, `status != "planned"`, `amount > 0`.
 - `_df_full` (via `load_full_data()`) — frame used by the Overview budget viz. Includes both `type == "regular"` (with the same `excluded` filter) and `type == "income"` rows. Income rows in Copilot's export are flagged `excluded=true` by convention, so the `excluded` filter is intentionally NOT applied to income rows. Income amounts are stored as positive values in the `pos_amount` column. Internal-transfer rows are excluded.
 
