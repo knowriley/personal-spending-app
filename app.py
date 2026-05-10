@@ -124,6 +124,8 @@ def api_overview_snapshot():
     return jsonify(dp.get_overview_snapshot(month))
 
 
+# RESERVED FOR FUTURE USE: not currently consumed by the frontend. Kept in
+# place for a future budgeting / income-vs-spending feature on the Overview tab.
 @app.route("/api/overview/budget")
 def api_overview_budget():
     month = request.args.get("month", "") or None

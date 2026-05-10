@@ -86,8 +86,10 @@ def load_data() -> pd.DataFrame:
 def load_full_data() -> pd.DataFrame:
     """Frame including income + spending rows (excludes 'internal transfer' and excluded=true).
 
-    Used by the Overview budget viz which needs both sides. Income amounts are stored
-    as positive values in the `pos_amount` column.
+    RESERVED FOR FUTURE USE: built and warmed at startup, but no frontend code
+    currently reads it. Intended for a future Overview income-vs-spending viz
+    that needs both sides. Income amounts are stored as positive values in the
+    `pos_amount` column.
     """
     global _df_full
     if _df_full is None:
@@ -821,6 +823,9 @@ def get_overview_snapshot(month: Optional[str] = None) -> dict:
 
 
 # ── Overview: monthly income vs. spending bars ────────────────────────────────
+# RESERVED FOR FUTURE USE: this section + the routes in app.py + load_full_data()
+# + the _df_full frame are not currently called from the frontend. Kept in place
+# for a future budgeting / income-vs-spending feature on the Overview tab.
 
 _BUDGET_TOP_N = 4  # top categories shown explicitly; remainder rolls into "Other"
 

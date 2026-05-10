@@ -49,7 +49,9 @@ AND amount  > 0
 
 That removes Copilot's "excluded" rows, all internal transfers, all income, all forward-dated/planned rows, and any zero or negative amounts. ~3,624 rows survive on the current dataset.
 
-### `_df_full` — spending + income (for the Overview budget bars)
+### `_df_full` — spending + income (reserved for future use)
+
+> ⚠️ **Currently dormant.** This frame is built and warmed at startup, but the only endpoints that read it (`/api/overview/budget`, `/api/overview/budget/months`) are not called from the frontend. Kept in place for a future budgeting / income-vs-spending feature on the Overview tab.
 
 Built by `load_full_data()` (`data_processor.py:86`). Keeps rows where:
 
@@ -114,7 +116,7 @@ These are the columns added on top of the raw CSV before anything reaches the AP
 
 - **Source**: `amount`
 - **Formula**: `abs(amount)`
-- **Plain language**: The signed-corrected amount. Copilot uses an accounting convention where money flowing in is **negative** (income looks like `-3000`) and money flowing out is positive. The Overview budget bars need to draw income on the same scale as spending, so we precompute the positive magnitude. We only need this for `_df_full` because `_df` already excludes all income/transfer rows, leaving only positive spending values.
+- **Plain language**: The signed-corrected amount. Copilot uses an accounting convention where money flowing in is **negative** (income looks like `-3000`) and money flowing out is positive. The reserved Overview income-vs-spending bars (see ⚠️ above) need to draw income on the same scale as spending, so we precompute the positive magnitude. We only need this for `_df_full` because `_df` already excludes all income/transfer rows, leaving only positive spending values.
 
 ★ = the derived columns the frontend depends on most heavily.
 
@@ -132,7 +134,7 @@ Each API endpoint computes additional values on the fly. These are derivations t
 | `/api/category-detail` | `data_processor.py:423` | `pct_of_total`, `transaction_count`, `avg_transaction`, `most_frequent_dow`, top-N merchants with an `"Other"` tail rollup, a per-day cumulative-spend array padded to the full calendar month, and (at parent/all scopes) `by_child` / `by_parent` rollups |
 | `/api/category-meta` | `data_processor.py:574` | For each `category_norm`, the **modal** `parent_category` it appears under — so leaves inherit their parent's color in the frontend even if a stray row miscategorized them |
 | `/api/overview/snapshot` | `data_processor.py:718` | MTD totals, prior-month MTD-prorated comparisons (`through_day` is bounded by today's day-of-month), trailing 3-month full + MTD averages, per-day cumulative arrays for both the active and the prior month |
-| `/api/overview/budget` | `data_processor.py:835` | Splits `_df_full` into income items (per row, by `name`) and spending items: paid (top-N categories by `category_norm`, rest collapsed into `"Other"`) plus planned rows (per row, by `name`). Statuses are normalized to `"received"` / `"paid"` / `"planned"` |
+| `/api/overview/budget` ⚠️ | `data_processor.py:835` | _Reserved for future use — not currently called from the frontend._ Splits `_df_full` into income items (per row, by `name`) and spending items: paid (top-N categories by `category_norm`, rest collapsed into `"Other"`) plus planned rows (per row, by `name`). Statuses are normalized to `"received"` / `"paid"` / `"planned"` |
 
 ---
 
