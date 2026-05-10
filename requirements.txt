@@ -1,2 +1,4 @@
 flask>=3.0
 pandas>=2.0
+livereload>=2.6
+gunicorn>=21

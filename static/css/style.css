@@ -1,5 +1,181 @@
+/* ── Design tokens (mirrors tailwind.config.js) ──────────────────────────────
+   Source of truth: tailwind.config.js (accent palette) + Tailwind defaults
+   (gray palette). Mirrored here as CSS custom properties so JS code (Plotly
+   trace colors, in particular) can read them via getComputedStyle without
+   hardcoding hex values inline. Update both places in lockstep. */
+:root {
+  --color-white:      #ffffff;
+  /* Brand accent — Tailwind indigo. Every shade hits ≥4.5:1 on white, so
+     the whole ramp is text-safe. Default to --color-accent-700 (indigo-700,
+     ~7.6:1) for chart accent lines and any role where contrast matters. */
+  --color-accent-50:  #eef2ff;
+  --color-accent-100: #e0e7ff;
+  --color-accent-200: #c7d2fe;
+  --color-accent-500: #6366f1;
+  --color-accent-600: #4f46e5;
+  --color-accent-700: #4338ca;
+  --color-accent-800: #3730a3;
+  --color-accent-900: #312e81;
+  /* Utility colors — semantic signal only (positive/negative deltas, success/
+     error). Text shade is -700 for AA contrast on white; -50/-100 work as
+     soft chip backgrounds paired with the -700 text. */
+  --color-utility-green-50:  #ecfdf5;
+  --color-utility-green-100: #d1fae5;
+  --color-utility-green-600: #059669;
+  --color-utility-green-700: #047857;
+  --color-utility-red-50:    #fff1f2;
+  --color-utility-red-100:   #ffe4e6;
+  --color-utility-red-600:   #e11d48;
+  --color-utility-red-700:   #be123c;
+  /* Neutrals — Tailwind 'neutral' family (true gray, no blue tint). */
+  --color-gray-50:    #fafafa;
+  --color-gray-100:   #f5f5f5;
+  --color-gray-200:   #e5e5e5;
+  --color-gray-300:   #d4d4d4;
+  --color-gray-400:   #a3a3a3;
+  --color-gray-500:   #737373;
+  --color-gray-600:   #525252;
+  --color-gray-700:   #404040;
+  --color-gray-800:   #262626;
+  --color-gray-900:   #171717;
+
+  /* Plotly colorway — generic series colors used by the shared layout's
+     `colorway` (orderless multi-trace charts that don't carry a specific
+     category mapping). Indigo ramp first (the brand accent), then a mixed
+     palette for additional series. */
+  --color-plot-0:     #6366f1;  /* indigo-500 */
+  --color-plot-1:     #818cf8;  /* indigo-400 */
+  --color-plot-2:     #a5b4fc;  /* indigo-300 */
+  --color-plot-3:     #c7d2fe;  /* indigo-200 */
+  --color-plot-4:     #e0e7ff;  /* indigo-100 */
+  --color-plot-5:     #f97316;  /* orange-500 */
+  --color-plot-6:     #fb923c;  /* orange-400 */
+  --color-plot-7:     #fca5a1;  /* red-300 */
+  --color-plot-8:     #34d399;  /* emerald-400 */
+  --color-plot-9:     #facc15;  /* yellow-400 */
+
+  /* Radial chart palette — six year-over-year rings on the radial visualization. */
+  --color-radial-0:   #3b82f6;  /* blue-500 */
+  --color-radial-1:   #f97316;  /* orange-500 */
+  --color-radial-2:   #6366f1;  /* indigo-500 */
+  --color-radial-3:   #10b981;  /* emerald-500 */
+  --color-radial-4:   #f43f5e;  /* rose-500 */
+  --color-radial-5:   #eab308;  /* yellow-500 */
+
+  /* ── Category palette ──────────────────────────────────────────────────────
+     Hex values are taken directly from Tailwind's default color palette.
+     Each slug exposes three shades:
+       -bg  → chip background (Tailwind 100)
+       -fg  → chip text       (Tailwind 700)
+       -mid → Plotly traces, dots (Tailwind 500)
+     Children of a parent group inherit their parent's slug — see
+     PARENT_SLUG / ORPHAN_SLUG in static/js/app.js. */
+
+  /* Parent groups */
+  --color-cat-food-bg:        #ffedd5;  /* orange-100 */
+  --color-cat-food-fg:        #c2410c;  /* orange-700 */
+  --color-cat-food-mid:       #f97316;  /* orange-500 */
+
+  --color-cat-personal-bg:    #fce7f3;  /* pink-100 */
+  --color-cat-personal-fg:    #be185d;  /* pink-700 */
+  --color-cat-personal-mid:   #ec4899;  /* pink-500 */
+
+  --color-cat-car-bg:         #dbeafe;  /* blue-100 */
+  --color-cat-car-fg:         #1d4ed8;  /* blue-700 */
+  --color-cat-car-mid:        #3b82f6;  /* blue-500 */
+
+  --color-cat-shopping-bg:    #d1fae5;  /* emerald-100 */
+  --color-cat-shopping-fg:    #047857;  /* emerald-700 */
+  --color-cat-shopping-mid:   #10b981;  /* emerald-500 */
+
+  /* Orphans — one Tailwind family each */
+  --color-cat-rent-bg:        #f5f5f4;  /* stone-100 */
+  --color-cat-rent-fg:        #44403c;  /* stone-700 */
+  --color-cat-rent-mid:       #78716c;  /* stone-500 */
+
+  --color-cat-apartment-bg:   #fef3c7;  /* amber-100 */
+  --color-cat-apartment-fg:   #b45309;  /* amber-700 */
+  --color-cat-apartment-mid:  #f59e0b;  /* amber-500 */
+
+  --color-cat-utilities-bg:   #cffafe;  /* cyan-100 */
+  --color-cat-utilities-fg:   #0e7490;  /* cyan-700 */
+  --color-cat-utilities-mid:  #06b6d4;  /* cyan-500 */
+
+  --color-cat-subs-bg:        #e0e7ff;  /* indigo-100 */
+  --color-cat-subs-fg:        #4338ca;  /* indigo-700 */
+  --color-cat-subs-mid:       #6366f1;  /* indigo-500 */
+
+  --color-cat-health-bg:      #fee2e2;  /* red-100 */
+  --color-cat-health-fg:      #b91c1c;  /* red-700 */
+  --color-cat-health-mid:     #ef4444;  /* red-500 */
+
+  --color-cat-gym-bg:         #ecfccb;  /* lime-100 */
+  --color-cat-gym-fg:         #4d7c0f;  /* lime-700 */
+  --color-cat-gym-mid:        #84cc16;  /* lime-500 */
+
+  --color-cat-yoga-bg:        #ccfbf1;  /* teal-100 */
+  --color-cat-yoga-fg:        #0f766e;  /* teal-700 */
+  --color-cat-yoga-mid:       #14b8a6;  /* teal-500 */
+
+  --color-cat-tattoo-bg:      #fae8ff;  /* fuchsia-100 */
+  --color-cat-tattoo-fg:      #a21caf;  /* fuchsia-700 */
+  --color-cat-tattoo-mid:     #d946ef;  /* fuchsia-500 */
+
+  --color-cat-edu-bg:         #ede9fe;  /* violet-100 */
+  --color-cat-edu-fg:         #6d28d9;  /* violet-700 */
+  --color-cat-edu-mid:        #8b5cf6;  /* violet-500 */
+
+  --color-cat-fun-bg:         #f3e8ff;  /* purple-100 */
+  --color-cat-fun-fg:         #7e22ce;  /* purple-700 */
+  --color-cat-fun-mid:        #a855f7;  /* purple-500 */
+
+  --color-cat-gifts-bg:       #ffe4e6;  /* rose-100 */
+  --color-cat-gifts-fg:       #be123c;  /* rose-700 */
+  --color-cat-gifts-mid:      #f43f5e;  /* rose-500 */
+
+  --color-cat-travel-bg:      #e0f2fe;  /* sky-100 */
+  --color-cat-travel-fg:      #0369a1;  /* sky-700 */
+  --color-cat-travel-mid:     #0ea5e9;  /* sky-500 */
+
+  --color-cat-laundry-bg:     #f1f5f9;  /* slate-100 */
+  --color-cat-laundry-fg:     #334155;  /* slate-700 */
+  --color-cat-laundry-mid:    #64748b;  /* slate-500 */
+
+  --color-cat-work-bg:        #f4f4f5;  /* zinc-100 */
+  --color-cat-work-fg:        #3f3f46;  /* zinc-700 */
+  --color-cat-work-mid:       #71717a;  /* zinc-500 */
+
+  --color-cat-moving-bg:      #fef9c3;  /* yellow-100 */
+  --color-cat-moving-fg:      #a16207;  /* yellow-700 */
+  --color-cat-moving-mid:     #eab308;  /* yellow-500 */
+
+  --color-cat-atm-bg:         #f5f5f5;  /* neutral-100 */
+  --color-cat-atm-fg:         #404040;  /* neutral-700 */
+  --color-cat-atm-mid:        #737373;  /* neutral-500 */
+
+  /* CC Interest shares the neutral family with ATM Fee, stepped one shade
+     darker so the two read as related (both bank fees) but distinguishable. */
+  --color-cat-cci-bg:         #e5e5e5;  /* neutral-200 */
+  --color-cat-cci-fg:         #262626;  /* neutral-800 */
+  --color-cat-cci-mid:        #525252;  /* neutral-600 */
+
+  --color-cat-loans-bg:       #dcfce7;  /* green-100 */
+  --color-cat-loans-fg:       #15803d;  /* green-700 */
+  --color-cat-loans-mid:      #22c55e;  /* green-500 */
+
+  --color-cat-other-bg:       #f3f4f6;  /* gray-100 */
+  --color-cat-other-fg:       #374151;  /* gray-700 */
+  --color-cat-other-mid:      #6b7280;  /* gray-500 */
+
+  /* Fallback for unknown / Uncategorized */
+  --color-cat-default-bg:     #f3f4f6;  /* gray-100 */
+  --color-cat-default-fg:     #4b5563;  /* gray-600 */
+  --color-cat-default-mid:    #9ca3af;  /* gray-400 */
+}
+
 /* ── Side panel — push layout ────────────────────────────────────────────────
    The aside starts at width:0 (hidden). When .panel-open is added it expands
+
    to 33vw, pushing the main content area to the left. The inner div stays
    fixed-width so content doesn't reflow during the transition. */
 
@@ -45,4 +221,154 @@
 
 .modebar-container {
   display: none !important;
+}
+
+/* Native month picker — make the calendar indicator feel clickable */
+input[type="month"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+input[type="month"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+/* Category emoji wrapper — locks rendering to a color-emoji font and
+   adds a small right-margin so the emoji never collides with the name. */
+.cat-emoji {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+               "Twemoji Mozilla", emoji;
+  font-style: normal;
+  font-weight: normal;
+  display: inline-block;
+  line-height: 1;
+  margin-right: 0.25rem;
+}
+
+/* Habits page-header category chip — sits above a separate pill-bar whose
+   color is bound to the active category's data-viz mid token via --cat-mid
+   (set inline on the chip's flex-col wrapper). The bar sits below the chip
+   with a small horizontal inset and rounded ends, matching the design-system
+   wireframe (Figma 12:994). */
+.hc-chip-bar {
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--cat-mid, currentColor);
+  margin: 4px 4px 0 4px;
+}
+
+/* Link button — underline on the label by default, drops on hover/focus.
+   The wrapping <button> handles bg + ring; this rule only governs the inner
+   .link-btn-lbl span so the trailing arrow stays unstyled. */
+.link-btn:hover .link-btn-lbl,
+.link-btn:focus .link-btn-lbl {
+  text-decoration: none;
+}
+
+/* Shared custom tooltip used by every Plotly chart in app.js. Per-chart
+   builders (tip*HTML) inject .ct-tip-style content; data-accent + --ct-accent
+   give an optional colored left border bound to a category's data-viz hue. */
+.ct-tip {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;            /* gray-200 */
+  border-radius: 8px;
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,0.10),
+              0 4px 8px -2px rgba(0,0,0,0.05);
+  padding: 10px 14px;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
+  color: #111827;                        /* gray-900 */
+  min-width: 160px;
+  max-width: 280px;
+}
+.ct-tip[data-accent] {
+  border-left: 4px solid var(--ct-accent, #6366f1);
+  padding-left: 12px;
+}
+.ct-tip-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.25;
+}
+.ct-tip-meta  { font-size: 11px; color: #6b7280; margin-top: 2px; }   /* gray-500 */
+.ct-tip-value { font-size: 18px; font-weight: 700; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.ct-tip-row   { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; font-size: 12px; }
+.ct-tip-row .lbl { color: #6b7280; }
+
+/* ── Info tooltip ────────────────────────────────────────────────────────────
+   Custom popover anchored to an info-icon trigger. Replaces the native `title`
+   attribute (ugly browser tooltip + help-cursor) with a styled bubble.
+   Pure CSS — no JS, opens on hover/focus, shows a triangle pointer. */
+.info-tt {
+  position: relative;
+  display: inline-flex;
+}
+
+.info-tt-bubble {
+  position: absolute;
+  bottom: calc(100% + 0.375rem);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14rem;
+  max-width: 90vw;
+  padding: 0.5rem 0.625rem;
+  background-color: #ffffff;
+  color: var(--color-gray-900);
+  border: 1px solid var(--color-gray-200);
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1),
+              0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+  z-index: 30;
+}
+
+.info-tt:hover .info-tt-bubble,
+.info-tt:focus-within .info-tt-bubble {
+  opacity: 1;
+}
+
+/* Two-layer arrow: the outer ::before draws the border-color tip, the inner
+   ::after draws the white fill 1px above it so the bubble's 1px border
+   carries down through the arrow. */
+.info-tt-bubble::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 0.3125rem solid transparent;
+  border-top-color: var(--color-gray-200);
+}
+.info-tt-bubble::after {
+  content: "";
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 0.3125rem solid transparent;
+  border-top-color: #ffffff;
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────────
+   Honor the OS-level "reduce motion" preference. Strips transitions and
+   animations on every element so the side-panel slide, tooltip fade, etc.
+   become instant. Tailwind's transition utilities use `transition` (longhand
+   properties), so a blanket override here covers them all. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

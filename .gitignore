@@ -1,5 +1,7 @@
-# Personal data — never commit
-transactions.csv
+# Personal data
+# NOTE: remove these lines when committing synthetic persona CSVs to a public repo
+datasets/*.csv
+.active-dataset
 
 # Python
 __pycache__/
@@ -11,3 +13,6 @@ venv/
 
 # macOS
 .DS_Store
+
+# Node (Tailwind build tooling)
+node_modules/
