@@ -2132,22 +2132,15 @@ async function renderHabitsRadial() {
     scrollToDrilldown();
   });
 
-  // Hover → custom tooltip + dim the other rings to spotlight the hovered year
-  // + enlarge the hovered month's dot (matches the cumulative charts' tracker).
+  // Hover → custom tooltip + dim the other rings to spotlight the hovered year.
   radialEl.on('plotly_hover', evt => {
     showCustomTooltip(tipRadialHTML(evt), evt.event);
     const pt = evt.points?.[0];
     if (pt?.data?.name) applyRadialHighlight(pt.data.name);
-    if (pt && pt.pointNumber != null && pt.curveNumber != null) {
-      const sizes = Array(12).fill(5);
-      sizes[pt.pointNumber] = 10;
-      Plotly.restyle(radialEl, { 'marker.size': [sizes] }, [pt.curveNumber]);
-    }
   });
   radialEl.on('plotly_unhover', () => {
     hideCustomTooltip();
     applyRadialHighlight();   // falls back to the pinned year (if any)
-    Plotly.restyle(radialEl, { 'marker.size': 5 });
   });
 
   // Initial paint: respect any pre-existing pin.
