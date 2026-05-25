@@ -5,9 +5,11 @@ Generates the full /dist/api/{persona}/ tree by calling data_processor
 functions directly (engineering doc §3.2 decision). The Flask routes
 in app.py are not involved.
 
-M5 scope: + PWA manifest (manifest.template.json → manifest.json with
-build-hash substitution) + templated index.html (v2-index.html → dist/
-index.html via Jinja with BUILD_HASH + DEPLOY_URL substitution).
+M6 scope: + service worker (service-worker.template.js → dist/sw.js with
+BUILD_HASH + an enumerated SHELL_URLS list substituted in). Caches the
+shell on install, serves it cache-first; /api/*.json gets stale-while-
+revalidate. Cache names are versioned by BUILD_HASH so deploys clean up
+on activate.
 """
 
 import json
@@ -66,6 +68,11 @@ def main():
     # 3. Render PWA manifest + index.html with substituted build identity.
     render_manifest_json()
     render_index_html()
+
+    # 4. Service worker — enumerates shell URLs from what's now under /dist
+    #    and bakes them into a per-build sw.js. Must run after the static
+    #    copy + the index/manifest renders so the shell URL list is complete.
+    render_service_worker()
 
     api_root = DIST / "api"
     api_root.mkdir()
@@ -220,6 +227,44 @@ def render_manifest_json() -> None:
     src = (ROOT / "manifest.template.json").read_text()
     rendered = src.replace("__BUILD_HASH__", BUILD_HASH)
     (DIST / "manifest.json").write_text(rendered)
+
+
+def render_service_worker() -> None:
+    """service-worker.template.js → dist/sw.js with BUILD_HASH and an
+    enumerated SHELL_URLS list substituted.
+
+    SHELL_URLS is built by walking /dist for the assets the SW should
+    pre-cache on install: the root URL, manifest, all CSS, all icons +
+    favicon, all splash screens. JS files under /static/js/ are NOT
+    pre-cached for M6 — v2 doesn't load any JS from there yet (the
+    inline script in v2-index.html is the only runtime JS today).
+    """
+    urls: list[str] = ["/", "/manifest.json"]
+
+    # CSS
+    css_dir = DIST / "static" / "css"
+    if css_dir.exists():
+        for f in sorted(css_dir.iterdir()):
+            if f.is_file() and f.suffix == ".css":
+                urls.append(f"/static/css/{f.name}")
+
+    # Icons (PNG + favicon.ico)
+    icons_dir = DIST / "static" / "icons"
+    for f in sorted(icons_dir.iterdir()):
+        if f.is_file() and f.suffix in (".png", ".ico"):
+            urls.append(f"/static/icons/{f.name}")
+
+    # Splash screens
+    splash_dir = DIST / "static" / "splash"
+    for f in sorted(splash_dir.iterdir()):
+        if f.is_file() and f.suffix == ".png":
+            urls.append(f"/static/splash/{f.name}")
+
+    src = (ROOT / "service-worker.template.js").read_text()
+    rendered = (src
+                .replace("__BUILD_HASH__", BUILD_HASH)
+                .replace("__SHELL_URLS__", json.dumps(urls)))
+    (DIST / "sw.js").write_text(rendered)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
