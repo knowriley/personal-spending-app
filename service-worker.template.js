@@ -58,8 +58,11 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Navigations (deep links etc.) → serve the cached app shell.
-  if (event.request.mode === 'navigate') {
+  // Root navigation (or /index.html) → serve the cached app shell.
+  // Other navigations (e.g. /tests/* dev pages, future deep links) pass
+  // through to the network so the actual target HTML is fetched.
+  if (event.request.mode === 'navigate' &&
+      (url.pathname === '/' || url.pathname === '/index.html')) {
     event.respondWith(
       caches.open(SHELL_CACHE).then(c => c.match('/', { ignoreSearch: true }))
         .then(r => r || fetch(event.request))
