@@ -17,3 +17,8 @@ node_modules/
 
 # v2 build output
 /dist
+
+# v2 generated assets (rebuilt by build_assets.py from source.svg files)
+/static/icons/*.png
+/static/icons/*.ico
+/static/splash/*.png

@@ -5,13 +5,16 @@ Generates the full /dist/api/{persona}/ tree by calling data_processor
 functions directly (engineering doc §3.2 decision). The Flask routes
 in app.py are not involved.
 
-M3 scope: every persona in dp.DATASETS, plus /api/personas.json.
+M4 scope: + asset pipeline (build_assets.py → PNGs + favicon.ico under
+static/icons/ and static/splash/) + copy static/ → dist/static/.
 M5 replaces the placeholder index.html with the templated PWA shell.
 """
 
 import json
 import re
 import shutil
+import subprocess
+import sys
 import time
 import unicodedata
 from pathlib import Path
@@ -21,6 +24,7 @@ import data_processor as dp
 
 ROOT = Path(__file__).parent
 DIST = ROOT / "dist"
+STATIC_SRC = ROOT / "static"
 
 # Timeframes that drive /api/summary's avg_start/avg_end. Mirrors the
 # v1 frontend's dateRangeFor() helper.
@@ -33,17 +37,27 @@ PLACEHOLDER_INDEX_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MoneyHabits</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
   <style>
     body { font: 16px -apple-system, system-ui, sans-serif; margin: 2rem; color: #1c1c1e; max-width: 32rem; }
     h1 { font-weight: 600; }
     code { background: #f2f2f7; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
     #months { color: #636366; }
+    .icon-preview { display: flex; gap: 12px; align-items: end; margin: 16px 0 24px; }
+    .icon-preview img { border-radius: 22%; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
   </style>
 </head>
 <body>
   <h1>MoneyHabits</h1>
-  <p>v2 build — M2 (per-persona JSON pre-computation).</p>
-  <p>The real frontend lands at M8+. Until then, this page just confirms the JSON tree is reachable.</p>
+  <p>v2 build — M4 (asset pipeline + JSON tree).</p>
+  <p>The real frontend lands at M8+. Until then, this page confirms the JSON tree is reachable and the icon assets render.</p>
+  <div class="icon-preview">
+    <img src="/static/icons/icon-120.png" width="60" height="60" alt="60pt">
+    <img src="/static/icons/icon-180.png" width="90" height="90" alt="90pt">
+    <img src="/static/icons/icon-192.png" width="120" height="120" alt="120pt">
+  </div>
   <p>Months available for <code>student</code>: <span id="months">loading...</span></p>
   <script>
     fetch('/api/student/months.json')
@@ -67,6 +81,14 @@ def main():
     if DIST.exists():
         shutil.rmtree(DIST)
     DIST.mkdir()
+
+    # 1. Rasterize icons + splash screens from source SVGs. Idempotent;
+    #    skips any PNG already newer than its source.
+    print("  → Building assets...")
+    subprocess.run([sys.executable, "build_assets.py"], check=True, cwd=ROOT)
+
+    # 2. Copy static assets (CSS, JS, generated icons + splash) into /dist.
+    shutil.copytree(STATIC_SRC, DIST / "static")
 
     (DIST / "index.html").write_text(PLACEHOLDER_INDEX_HTML)
     api_root = DIST / "api"

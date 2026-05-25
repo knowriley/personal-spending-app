@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1290 2796">
+  <!-- MoneyHabits v2 placeholder splash — white background, indigo M-on-square mark
+       in upper-middle third (vertical center at ~33% from top). The same path "M"
+       as the icon source, scaled and re-positioned. Iterate visual later. -->
+  <rect width="1290" height="2796" fill="#ffffff"/>
+  <!-- Indigo tile centered horizontally at y=720..1232 (height 512px, centered around y=976) -->
+  <rect x="389" y="720" width="512" height="512" rx="0" fill="#4338ca"/>
+  <!-- M path translated to (389, 720) — same shape as icon source -->
+  <path d="M 499 1120 L 499 850 L 645 1040 L 791 850 L 791 1120"
+        stroke="#ffffff"
+        stroke-width="60"
+        stroke-linecap="butt"
+        stroke-linejoin="miter"
+        stroke-miterlimit="4"
+        fill="none"/>
+</svg>

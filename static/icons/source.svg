@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- MoneyHabits v2 placeholder icon — path-based "M" mark on accent-700 indigo.
+       Iterate visual later; the build pipeline only needs this to be a valid SVG. -->
+  <rect width="512" height="512" fill="#4338ca"/>
+  <path d="M 110 400 L 110 130 L 256 320 L 402 130 L 402 400"
+        stroke="#ffffff"
+        stroke-width="60"
+        stroke-linecap="butt"
+        stroke-linejoin="miter"
+        stroke-miterlimit="4"
+        fill="none"/>
+</svg>
