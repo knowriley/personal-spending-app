@@ -13,8 +13,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
-  <!-- Plotly.js -->
+  <!-- Plotly.js — still used by the Habits radial chart (converted to a hand-rolled
+       SVG in M9; the CDN tag is removed then). All other charts are Chart.js. -->
   <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+
+  <!-- Chart.js 4.x (vendored locally) + datalabels plugin (donut slice labels).
+       datalabels must load after Chart.js; both must precede app.js. -->
+  <script src="/static/js/chart.umd.min.js"></script>
+  <script src="/static/js/chartjs-plugin-datalabels.min.js"></script>
 
   <!-- App styles -->
   <link rel="stylesheet" href="/static/css/style.css" />
@@ -128,8 +134,14 @@
 
   </div>
 
-  <!-- Shared custom tooltip used by every Plotly chart in app.js (see tip*HTML builders) -->
+  <!-- Custom DOM tooltip — now used only by the Plotly radial chart (see tip*HTML
+       builders). The Chart.js charts use #cjs-tip below; this element + its
+       wiring stay so the radial keeps working until M9. -->
   <div id="ct-tip" class="hidden fixed pointer-events-none z-50"></div>
+
+  <!-- Chart.js native-tooltip target. Styled with the same .ct-tip classes via
+       the external-tooltip callback (makeTipExternal in app.js). -->
+  <div id="cjs-tip" class="hidden fixed pointer-events-none z-50"></div>
 
   {% block scripts %}{% endblock %}
 </body>

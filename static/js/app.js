@@ -100,6 +100,127 @@ function tipCatBadge(name) {
   return `${emoji}${escHtml(name)}`;
 }
 
+// ── Chart.js shared infrastructure ───────────────────────────────────────────
+// Every non-radial chart renders via Chart.js (M8). These helpers mirror the
+// Plotly theme above: global defaults set once at boot, a per-render layout
+// fragment, a canvas-lifecycle registry, and a native-tooltip styler that
+// reuses tipCard() so Chart.js tooltips look identical to the old Plotly ones.
+
+let _chartDefaultsInited = false;
+function initChartDefaults() {
+  if (_chartDefaultsInited || typeof Chart === 'undefined') return;
+  _chartDefaultsInited = true;
+  Chart.defaults.font.family = 'Inter, ui-sans-serif, system-ui, sans-serif';
+  Chart.defaults.font.size = 12;
+  Chart.defaults.color = token('color-gray-700');
+  Chart.defaults.borderColor = token('color-gray-100');
+  Chart.defaults.responsive = true;
+  Chart.defaults.maintainAspectRatio = false;
+  Chart.defaults.plugins.legend.display = false;   // legends rarely earn their slot
+  Chart.defaults.animation.duration = 200;          // snappier than the 1000ms default
+  // datalabels is registered globally but OFF by default — only the drill-down
+  // donut opts in (per-chart options.plugins.datalabels.display = true).
+  if (window.ChartDataLabels) {
+    Chart.register(window.ChartDataLabels);
+    Chart.defaults.set('plugins.datalabels', { display: false });
+  }
+}
+
+// Per-render layout fragment (NOT memoized — reads window.innerWidth so the
+// mobile/desktop split tracks viewport changes). Each chart merges its own
+// scale overrides on top: `{ ...chartLayout(), scales: { x: {...base.scales.x, …} } }`.
+function chartLayout() {
+  const isMobile = window.innerWidth < 768;
+  return {
+    layout: {
+      padding: isMobile ? { left: 4, right: 8, top: 8, bottom: 4 }
+                        : { left: 8, right: 16, top: 12, bottom: 8 },
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { color: token('color-gray-500'), font: { size: isMobile ? 11 : 12 } },
+      },
+      y: {
+        grid: { color: token('color-gray-100') },
+        ticks: {
+          color: token('color-gray-500'),
+          font: { size: isMobile ? 11 : 12 },
+          callback: (v) => fmt(v),
+        },
+      },
+    },
+  };
+}
+
+// Chart.js needs a <canvas>; the old Plotly containers were <div>s. Find-or-create
+// a single canvas child of the container and return it (Chart accepts the element).
+function getChartCanvas(containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return null;
+  let canvas = el.querySelector('canvas');
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    el.appendChild(canvas);
+  }
+  return canvas;
+}
+
+// Instance registry. Re-rendering is frequent here (month/scope toggles), and
+// `new Chart()` over a live instance on the same canvas leaks a resize observer.
+// Always destroy before re-creating. When a render path resets the container's
+// innerHTML (e.g. renderOverviewLineChart), call destroyChart() BEFORE the reset
+// so the prior canvas isn't orphaned with an observer still attached.
+const _charts = {};
+function mountChart(containerId, config) {
+  if (typeof Chart === 'undefined') return null;
+  initChartDefaults();
+  _charts[containerId]?.destroy();
+  const canvas = getChartCanvas(containerId);
+  if (!canvas) return null;
+  _charts[containerId] = new Chart(canvas, config);
+  return _charts[containerId];
+}
+function destroyChart(containerId) {
+  _charts[containerId]?.destroy();
+  delete _charts[containerId];
+}
+
+// Native-tooltip styler. Returns a Chart.js `external` handler that renders the
+// shared tipCard() markup into #cjs-tip (separate from the radial chart's #ct-tip).
+// `buildSpec(context)` maps the hovered dataPoints → a tipCard spec
+// ({ accentSlug, title, meta, value, rows }); return null to suppress.
+function makeTipExternal(buildSpec) {
+  return (context) => {
+    const tip = (makeTipExternal._el ??= document.getElementById('cjs-tip'));
+    if (!tip) return;
+    const tt = context.tooltip;
+    if (!tt || tt.opacity === 0) { tip.classList.add('hidden'); return; }
+    const spec = buildSpec(context);
+    if (!spec) { tip.classList.add('hidden'); return; }
+    tip.innerHTML = tipCard(spec);
+    tip.classList.remove('hidden');
+    // caretX/Y are canvas-relative; convert to viewport coords.
+    const rect = context.chart.canvas.getBoundingClientRect();
+    positionCjsTip(tip, rect.left + tt.caretX, rect.top + tt.caretY);
+  };
+}
+
+// Same flip logic as positionCustomTooltip, but driven by explicit viewport
+// coords (the Chart.js caret) rather than a mouse event.
+function positionCjsTip(tip, x, y) {
+  const r = tip.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight, pad = 12;
+  let left = x + pad;
+  let top  = y - r.height - pad;
+  if (left + r.width > vw - 8) left = x - r.width - pad;   // flip left
+  if (left < 8) left = 8;
+  if (top < 8) top = y + pad;                              // flip below
+  if (top + r.height > vh - 8) top = Math.max(8, vh - r.height - 8);
+  tip.style.left = left + 'px';
+  tip.style.top  = top  + 'px';
+}
+
 // ── Navigation ────────────────────────────────────────────────────────────────
 let activeTab = 'overview';
 let habitsInited = false;
@@ -295,7 +416,9 @@ async function initDatasetSwitcher() {
   });
 }
 
-initDatasetSwitcher();
+// __CHART_PLAYGROUND__ is set by tests/charts-playground.html, which loads this
+// file only for its chart render functions — skip the live-app boot there.
+if (!window.__CHART_PLAYGROUND__) initDatasetSwitcher();
 
 
 // ── Overview tab ─────────────────────────────────────────────────────────────
@@ -729,128 +852,95 @@ function renderOverviewLineChart(snap) {
   const container = document.getElementById('overview-chart-card');
   if (!container) return;
 
-  // Reset card markup each call (avoids accumulating Plotly chart elements)
+  // Destroy the prior instance BEFORE wiping the card, or the old canvas is
+  // orphaned with a live resize observer (leak).
+  destroyChart('overview-chart');
+
+  const chartH = window.innerWidth < 768 ? 240 : 320;
   container.innerHTML = `
     <p class="text-lg font-semibold text-neutral-900">${escHtml(chartTitleFor(snap.month))}</p>
-    <div id="overview-chart" class="w-full mt-3" style="height:380px"></div>
+    <div id="overview-chart" class="w-full mt-3" style="height:${chartH}px"></div>
   `;
 
   const accentColor = token('color-accent-700');
   const greyColor   = token('color-gray-400');
-  const gridColor   = token('color-gray-100');
 
-  const traces = [];
-
-  // Month-name prefix for x-axis tick labels (e.g. "May 1, May 5, …"). Both
-  // lines share the same day-of-month axis; we anchor labels to the focused
-  // (this-month) name, which is the user's primary reference.
-  const [snapYr, snapMo] = (snap.month || '').split('-').map(Number);
+  // Both lines share a 1..maxDays day-of-month axis; series are mapped onto that
+  // index and padded with null past their last posted day.
+  const [, snapMo] = (snap.month || '').split('-').map(Number);
   const monthName = (snapMo && snapMo >= 1 && snapMo <= 12) ? MONTH_LABELS[snapMo - 1] : '';
-
-  if (snap.this_cumulative && snap.this_cumulative.length) {
-    traces.push({
-      type: 'scatter',
-      mode: 'lines+markers',
-      name: 'This month',
-      x: snap.this_cumulative.map(d => d.day),
-      y: snap.this_cumulative.map(d => d.total),
-      line: { color: accentColor, width: 2 },
-      // Markers invisible at baseline; hover handler restyles the hovered
-      // point's size + opacity so a tracking dot snaps to the cursor.
-      marker: { color: accentColor, size: 0, opacity: 0, line: { color: token('color-white'), width: 2 } },
-      fill: 'tozeroy',
-      fillcolor: hexToRgba(accentColor, 0.08),
-      hoverinfo: 'none',
-    });
-  }
-
-  if (snap.last_cumulative && snap.last_cumulative.length) {
-    traces.push({
-      type: 'scatter',
-      mode: 'lines+markers',
-      name: 'Last month',
-      x: snap.last_cumulative.map(d => d.day),
-      y: snap.last_cumulative.map(d => d.total),
-      line: { color: greyColor, width: 2 },
-      marker: { color: greyColor, size: 0, opacity: 0, line: { color: token('color-white'), width: 2 } },
-      hoverinfo: 'none',
-    });
-  }
-
-  const lastDayThis = (snap.this_cumulative && snap.this_cumulative.length)
-    ? snap.this_cumulative[snap.this_cumulative.length - 1].day : 0;
-  const lastDayLast = (snap.last_cumulative && snap.last_cumulative.length)
-    ? snap.last_cumulative[snap.last_cumulative.length - 1].day : 0;
+  const lastDayThis = snap.this_cumulative?.length ? snap.this_cumulative[snap.this_cumulative.length - 1].day : 0;
+  const lastDayLast = snap.last_cumulative?.length ? snap.last_cumulative[snap.last_cumulative.length - 1].day : 0;
   const maxDays = Math.max(lastDayThis, lastDayLast, 28);
+  const labels  = Array.from({ length: maxDays }, (_, i) => i + 1);
 
-  Plotly.newPlot('overview-chart', traces, {
-    ...plotlyLayout(),
-    xaxis: {
-      range:     [0.5, maxDays + 0.5],
-      tickmode:  'array',
-      tickvals:  Array.from({ length: maxDays }, (_, i) => i + 1),
-      ticktext:  Array.from({ length: maxDays }, (_, i) => monthName ? `${monthName} ${i + 1}` : String(i + 1)),
-      tickfont:  { size: 10 },
-      tickangle: -45,
-      gridcolor: gridColor,
-      title:     { text: '', standoff: 4 },
-      automargin: true,
-    },
-    yaxis: {
-      tickformat: '$,.0f',
-      tickfont: { size: 12 },
-      gridcolor: gridColor,
-      side: 'right',
-    },
-    margin: { t: 20, r: 90, b: 56, l: 20 },
-    showlegend: traces.length > 0,
-    legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.12, font: { size: 12 } },
-    annotations: [{
-      text: 'Spend',
-      xref: 'paper', yref: 'paper',
-      x: 1, y: 0.5,
-      xanchor: 'left', yanchor: 'middle',
-      xshift: 70,
-      showarrow: false,
-      textangle: 90,
-      font: { size: 12 },
-    }],
-  }, PLOTLY_CONFIG);
-  setChartA11y('overview-chart', 'Cumulative spend chart, current month vs last month, line chart by day');
+  const seriesByDay = (rows) => {
+    const arr = Array(maxDays).fill(null);
+    (rows || []).forEach(d => { if (d.day >= 1 && d.day <= maxDays) arr[d.day - 1] = d.total; });
+    return arr;
+  };
 
-  const ovChart = document.getElementById('overview-chart');
-  // Per-trace point counts so the marker-opacity arrays line up with each trace.
-  const traceLens = traces.map(t => t.x.length);
-  ovChart?.on('plotly_hover', evt => {
-    showCustomTooltip(tipOverviewCumulHTML(evt), evt.event);
-    const pt = evt.points?.[0];
-    if (!pt || pt.pointNumber == null || pt.curveNumber == null) return;
-    const len = traceLens[pt.curveNumber] || 0;
-    const sizes  = Array(len).fill(0); sizes[pt.pointNumber]  = 9;
-    const opaArr = Array(len).fill(0); opaArr[pt.pointNumber] = 1;
-    Plotly.restyle('overview-chart',
-      { 'marker.size': [sizes], 'marker.opacity': [opaArr] }, [pt.curveNumber]);
-  });
-  ovChart?.on('plotly_unhover', () => {
-    hideCustomTooltip();
-    traceLens.forEach((len, i) => {
-      Plotly.restyle('overview-chart',
-        { 'marker.size': [Array(len).fill(0)], 'marker.opacity': [Array(len).fill(0)] }, [i]);
+  const datasets = [];
+  if (snap.this_cumulative?.length) {
+    datasets.push({
+      label: 'This month',
+      data: seriesByDay(snap.this_cumulative),
+      borderColor: accentColor, borderWidth: 2,
+      backgroundColor: hexToRgba(accentColor, 0.08), fill: 'origin',
+      pointRadius: 0, pointHoverRadius: 9,
+      pointHoverBackgroundColor: accentColor,
+      pointHoverBorderColor: token('color-white'), pointHoverBorderWidth: 2,
+      tension: 0, spanGaps: true,
     });
+  }
+  if (snap.last_cumulative?.length) {
+    datasets.push({
+      label: 'Last month',
+      data: seriesByDay(snap.last_cumulative),
+      borderColor: greyColor, borderWidth: 2, fill: false,
+      pointRadius: 0, pointHoverRadius: 9,
+      pointHoverBackgroundColor: greyColor,
+      pointHoverBorderColor: token('color-white'), pointHoverBorderWidth: 2,
+      tension: 0, spanGaps: true,
+    });
+  }
+
+  const base = chartLayout();
+  mountChart('overview-chart', {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      ...base,
+      interaction: { mode: 'nearest', intersect: false },
+      scales: {
+        x: { ...base.scales.x,
+             ticks: { ...base.scales.x.ticks, maxRotation: 45, minRotation: 45,
+                      callback: (v, i) => monthName ? `${monthName} ${labels[i]}` : String(labels[i]) } },
+        y: { ...base.scales.y, position: 'right', beginAtZero: true,
+             title: { display: true, text: 'Spend', color: token('color-gray-500'), font: { size: 12 } } },
+      },
+      plugins: {
+        legend: { display: datasets.length > 0, position: 'top', align: 'end',
+                  labels: { usePointStyle: true, boxWidth: 8, font: { size: 12 } } },
+        tooltip: { enabled: false, external: makeTipExternal(cjsTipOverviewCumul) },
+      },
+    },
   });
+  setChartA11y('overview-chart', 'Cumulative spend chart, current month vs last month, line chart by day');
 }
 
-// Overview cumulative tooltip — accent matches the active series ("This month"
-// uses accent color, "Last month" is muted).
-function tipOverviewCumulHTML(evt) {
-  const pt = evt.points?.[0];
-  if (!pt) return '';
-  const isThis = pt.data?.name === 'This month';
-  return tipCard({
-    title: `Day ${pt.x}`,
-    meta: pt.data?.name || '',
-    value: isThis ? fmt(pt.y || 0) : `Last month: ${fmt(pt.y || 0)}`,
-  });
+// Overview cumulative tooltip spec — "This month" shows the bare value; the muted
+// "Last month" overlay is labeled inline.
+function cjsTipOverviewCumul(ctx) {
+  const dp = ctx.tooltip.dataPoints?.[0];
+  if (!dp) return null;
+  const isThis = dp.dataset.label === 'This month';
+  const value = fmt(dp.parsed.y || 0);
+  return {
+    title: `Day ${dp.label}`,
+    meta: dp.dataset.label || '',
+    value: isThis ? value : `Last month: ${value}`,
+  };
 }
 
 // Navigation helpers — set window.moneyHabitsNav, then switch tabs. Other tabs
@@ -1015,39 +1105,39 @@ function setHabitsSectionHeadings() {
   if (dEl) dEl.textContent = lensMonth ? `${formatMonthLabel(lensMonth)} in detail` : 'Selected month in detail';
 }
 
-// Highlight the lensMonth column on the bar chart (others dim to 0.3). Reads
-// the live trace data to avoid re-rendering — a Plotly.restyle is enough. No-op
-// in radial mode, when no chart exists yet, or when lensMonth isn't in range.
+// Highlight the lensMonth column on the bar chart (others dim to 0.3 alpha).
+// Rewrites each bar dataset's backgroundColor to a per-bar array and applies a
+// no-animation update — no re-fetch / re-mount. No-op in radial mode or when no
+// chart exists yet. The compare overlay line (_noHighlight) is left untouched.
 function applyMonthHighlight(extraHover) {
   if (chartType !== 'bar') return;
-  const chartEl = document.getElementById('chart-monthly');
-  if (!chartEl || !chartEl.data || !chartEl.data.length) return;
-  const periods = chartEl.data[0]?.x || [];
-  const traceCount = chartEl.data.length;
+  const chart = _charts['chart-monthly'];
+  if (!chart) return;
+  const periods  = chart.data.labels || [];
+  const datasets = chart.data.datasets || [];
+  if (!periods.length || !datasets.length) return;
 
-  // A column "has data" only when at least one trace has non-zero spend at
-  // that index. Highlighting an empty column would dim every visible bar
-  // (e.g. lensMonth defaults to the current month, which has no data yet),
-  // so treat empty highlights as no-selection.
+  // A column "has data" only when at least one bar dataset has non-zero spend
+  // at that index. Highlighting an empty column would dim every visible bar
+  // (e.g. lensMonth defaults to the current month, which has no data yet), so
+  // treat empty highlights as no-selection.
   const colHasData = i =>
     i >= 0 && i < periods.length &&
-    chartEl.data.some(t => (Array.isArray(t.y) ? (t.y[i] || 0) : 0) > 0);
+    datasets.some(ds => !ds._noHighlight && (Number(ds.data[i]) || 0) > 0);
 
   const rawMonthIdx = lensMonth ? periods.indexOf(lensMonth) : -1;
   const monthIdx    = colHasData(rawMonthIdx) ? rawMonthIdx : -1;
   const hoverIdx    = (extraHover && extraHover.pointIdx != null && colHasData(extraHover.pointIdx))
     ? extraHover.pointIdx : -1;
-
   const noSelection = monthIdx < 0 && hoverIdx < 0;
-  const opacities = Array.from({ length: traceCount }, () =>
-    noSelection
-      ? periods.map(() => 1)
-      : periods.map((_, i) => (i === monthIdx || i === hoverIdx) ? 1 : 0.3)
-  );
-  Plotly.restyle('chart-monthly',
-    { 'marker.opacity': opacities },
-    Array.from({ length: traceCount }, (_, i) => i)
-  );
+
+  datasets.forEach(ds => {
+    if (ds._noHighlight) return;
+    const lit = ds._base || token('color-accent-700');
+    ds.backgroundColor = periods.map((_, i) =>
+      (noSelection || i === monthIdx || i === hoverIdx) ? lit : hexToRgba(lit, 0.3));
+  });
+  chart.update('none');
 }
 
 function scrollToDrilldown() {
@@ -1286,6 +1376,9 @@ async function initDashboard() {
   const mq = window.matchMedia('(min-width: 768px)');
   const onMqChange = e => {
     if (!e.matches && chartType === 'radial') setChartType('bar');
+    // Swap the drill-down bubble (desktop) ↔ daily strip (mobile) on breakpoint
+    // cross. renderDdBubble dispatches to the right one based on viewport width.
+    if (_ddLastData) renderDdBubble(_ddLastData, null, _ddLastColor);
   };
   if (mq.addEventListener) mq.addEventListener('change', onMqChange);
   else                     mq.addListener(onMqChange);  // older Safari
@@ -1670,8 +1763,6 @@ async function renderHabitsChart() {
     return '?' + params.toString();
   };
 
-  const hoverFmt = granularity === 'month' ? '%b %Y' : '%b %-d, %Y';
-
   // Decide query shape per (level, view).
   let queryOpts = {};
   let mode = 'single';   // 'single' | 'stacked'
@@ -1696,7 +1787,7 @@ async function renderHabitsChart() {
   const primary = await fetch('/api/monthly' + buildQuery(start, end, queryOpts)).then(r => r.json());
   const periods = primary.map(d => d.period);
 
-  const traces = [];
+  const datasets = [];
 
   if (mode === 'stacked') {
     // Aggregate every key seen across periods so stack ordering is stable.
@@ -1714,35 +1805,35 @@ async function renderHabitsChart() {
         ? derivedShade(catHex(lensCategory, 'mid'), idx, keys.length)
         : (key === 'Other' ? token('color-cat-default-mid') : catHex(key, 'mid'));
 
-      traces.push({
-        type: 'bar',
-        x: periods,
-        y: primary.map(row => row.totals?.[key] || 0),
-        marker: { color, line: { color: token('color-white'), width: 0.5 } },
-        name: key,
-        hoverinfo: 'none',
+      datasets.push({
+        label: key,
+        data: primary.map(row => row.totals?.[key] || 0),
+        backgroundColor: color,
+        _base: color,                       // applyMonthHighlight reads this
+        borderColor: token('color-white'),
+        borderWidth: 0.5,
+        stack: 'spend',
+        categoryPercentage: 0.7,
+        barPercentage: 0.98,
       });
     });
   } else {
-    // Single-trace bar (total, leaf, or all-with-no-stack).
+    // Single bar (total, leaf, or all-with-no-stack).
     // 'all' scope is the canonical view → brand indigo (accent-700). Leaf/parent use their own hue.
-    const totals = primary.map(d => d.total);
-    const traceColor = lensLevel === 'leaf'   ? catHex(lensCategory, 'mid')
-                     : lensLevel === 'parent' ? catHex(lensCategory, 'mid')
-                     :                          token('color-accent-700');
-    traces.push({
-      type: 'bar',
-      x: periods,
-      y: totals,
-      marker: { color: traceColor },
-      hoverinfo: 'none',
-      name: lensLevel === 'all' ? 'All Spending' : lensCategory,
+    const traceColor = lensLevel === 'all' ? token('color-accent-700') : catHex(lensCategory, 'mid');
+    datasets.push({
+      label: lensLevel === 'all' ? 'All Spending' : lensCategory,
+      data: primary.map(d => d.total),
+      backgroundColor: traceColor,
+      _base: traceColor,
+      categoryPercentage: 0.7,
+      barPercentage: 0.9,
     });
   }
 
-  // Compare overlay (skipped in stacked mode by setLensCompare invariant).
-  // Chart is always monthly, so we shift the window by `periods.length` months
-  // ending at lensCompare.
+  // Compare overlay (skipped in stacked mode by setLensCompare invariant) — a
+  // dashed line on top of the bars. Chart is always monthly, so we shift the
+  // window by `periods.length` months ending at lensCompare.
   if (lensCompare && mode === 'single') {
     const compareQuery = (() => {
       const [cy, cm] = lensCompare.split('-').map(Number);
@@ -1755,153 +1846,129 @@ async function renderHabitsChart() {
     const compare = await fetch('/api/monthly' + compareQuery).then(r => r.json());
     const compareTotals = compare.map(d => d.total || 0);
     while (compareTotals.length < periods.length) compareTotals.push(0);
-    traces.push({
-      type: 'scatter',
-      mode: 'lines+markers',
-      x: periods,
-      y: compareTotals.slice(0, periods.length),
-      line:   { color: S1_COMPARE_COLOR(), width: 2, dash: 'dash' },
-      marker: { color: S1_COMPARE_COLOR(), size: 5 },
-      name: `vs ${formatMonthLabel(lensCompare)}`,
-      hoverinfo: 'none',
+    datasets.push({
+      type: 'line',
+      label: `vs ${formatMonthLabel(lensCompare)}`,
+      data: compareTotals.slice(0, periods.length),
+      borderColor: S1_COMPARE_COLOR(),
+      borderWidth: 2,
+      borderDash: [6, 3],
+      pointRadius: 3,
+      pointBackgroundColor: S1_COMPARE_COLOR(),
+      tension: 0,
+      _noHighlight: true,        // applyMonthHighlight skips the overlay line
     });
   }
 
-  // Pre-compute tick labels — Plotly's tickformat is ignored on categorical axes.
+  // Pre-compute tick labels (e.g. "May", "May '24").
   const ticktext = periods.map((p, i) => formatPeriodTick(p, granularity, i, periods.length));
 
-  Plotly.newPlot('chart-monthly', traces, {
-    ...plotlyLayout(),
-    barmode: mode === 'stacked' ? 'stack' : 'group',
-    xaxis: {
-      type: 'category',
-      tickfont: { size: 12 },
-      tickmode: 'array',
-      tickvals: periods,
-      ticktext: ticktext,
-      tickangle: 0,
+  // Height per viewport (PRD §8.4): 360 mobile / 480 desktop.
+  const monthEl = document.getElementById('chart-monthly');
+  if (monthEl) monthEl.style.height = (window.innerWidth < 768 ? 360 : 480) + 'px';
+
+  const isMobile = window.innerWidth < 768;
+  const base = chartLayout();
+  const chart = mountChart('chart-monthly', {
+    type: 'bar',
+    data: { labels: periods, datasets },
+    options: {
+      ...base,
+      // Mobile taps drill (no tooltip); desktop hover identifies via the tooltip.
+      interaction: { mode: 'nearest', intersect: true },
+      scales: {
+        x: { ...base.scales.x, stacked: mode === 'stacked',
+             ticks: { ...base.scales.x.ticks, callback: (v, i) => ticktext[i] } },
+        y: { ...base.scales.y, stacked: mode === 'stacked', beginAtZero: true },
+      },
+      // Click-to-drill: stacked segment → scope drill; otherwise focus the month.
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const { datasetIndex, index } = elements[0];
+        if (mode === 'stacked') {
+          const name = datasets[datasetIndex]?.label;
+          if (name && name !== 'Other') {
+            if (lensLevel === 'all')    { setScopeParent(name); return; }
+            if (lensLevel === 'parent') { setScopeLeaf(name);   return; }
+          }
+        }
+        const monthKey = periods[index];
+        if (monthKey) { setLensMonth(monthKey); scrollToDrilldown(); }
+      },
+      onHover: (evt, elements, ch) => {
+        const idx = elements.length ? elements[0].index : -1;
+        ch.canvas.style.cursor = idx >= 0 ? 'pointer' : 'default';
+        if (ch.$lastHover === idx) return;       // only re-highlight on change
+        ch.$lastHover = idx;
+        applyMonthHighlight(idx >= 0 ? { pointIdx: idx } : undefined);
+      },
+      plugins: {
+        // Legend: re-enabled for stacked modes only (color key + tap-to-drill
+        // target on mobile). Off for single/leaf/total. legend.onClick drills
+        // into the clicked series instead of toggling visibility.
+        legend: {
+          display: mode === 'stacked',
+          position: 'top', align: 'end',
+          labels: { usePointStyle: true, boxWidth: 10, font: { size: 12 } },
+          onClick: (e, item) => {
+            const name = datasets[item.datasetIndex]?.label;
+            if (!name || name === 'Other') return;
+            if (lensLevel === 'all')    setScopeParent(name);
+            else if (lensLevel === 'parent') setScopeLeaf(name);
+          },
+        },
+        tooltip: isMobile
+          ? { enabled: false }
+          : { enabled: false, external: makeTipExternal((ctx) => cjsTipBar(ctx, mode, primary)) },
+      },
     },
-    yaxis: { tickformat: '$,.0f', tickfont: { size: 12 }, gridcolor: token('color-gray-100') },
-    bargap: 0.3,
-    showlegend: mode === 'stacked' || !!lensCompare,
-    // Anchor the legend's bottom just above the plot. With more than ~5 entries
-    // the legend wraps to multiple rows; yanchor:'bottom' makes additional rows
-    // grow upward into the top margin instead of down into the chart.
-    legend: { orientation: 'h', x: 1, xanchor: 'right', y: 1.02, yanchor: 'bottom', font: { size: 12 } },
-    margin: { t: 80, r: 10, b: 50, l: 70 },
-  }, PLOTLY_CONFIG);
+  });
+  if (chart) chart.$lastHover = -1;
+
   const scopeLabel = lensLevel === 'all' ? 'All spending' : (lensCategory || 'spending');
   setChartA11y('chart-monthly', `${scopeLabel} trend chart, ${mode === 'stacked' ? 'stacked by parent group' : 'total by ' + granularity}, ${periods.length} ${granularity}${periods.length !== 1 ? 's' : ''}`);
-
-  // Click handlers:
-  // - Stacked-by-parent (level=all): segment click → drill into that parent.
-  // - Stacked-by-child  (level=parent): segment click → drill into that leaf.
-  // - Otherwise: bar click → set the focused month + smooth-scroll to drill-down.
-  //   The chart itself does NOT re-render — only KPIs and drill-down update.
-  const chartEl = document.getElementById('chart-monthly');
-  chartEl.on('plotly_click', evt => {
-    const pt = evt.points[0];
-    if (mode === 'stacked' && lensLevel === 'all') {
-      const parentName = pt.data?.name;
-      if (parentName && parentName !== 'Other') {
-        setScopeParent(parentName);
-        return;
-      }
-    }
-    if (mode === 'stacked' && lensLevel === 'parent') {
-      const leafName = pt.data?.name;
-      if (leafName && leafName !== 'Other') {
-        setScopeLeaf(leafName);
-        return;
-      }
-    }
-    const raw = pt.x;
-    let monthKey = '';
-    if (typeof raw === 'string' && /^\d{4}-\d{2}$/.test(raw)) {
-      monthKey = raw;
-    } else {
-      const d = new Date(raw);
-      if (!isNaN(d)) monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    }
-    if (monthKey) {
-      setLensMonth(monthKey);
-      scrollToDrilldown();
-    }
-  });
-
-  // Legend click → drill into the trace's category instead of toggling its
-  // visibility. Returning false suppresses Plotly's default visibility toggle.
-  chartEl.on('plotly_legendclick', evt => {
-    const traceName = traces[evt.curveNumber]?.name;
-    if (!traceName || traceName === 'Other') return false;
-    if (mode === 'stacked' && lensLevel === 'all')    setScopeParent(traceName);
-    else if (mode === 'stacked' && lensLevel === 'parent') setScopeLeaf(traceName);
-    return false;
-  });
-
-  // Custom tooltip wiring + bar dim-on-hover. The hovered bar (and the
-  // lensMonth bar, if any) stay full-opacity; everything else dims via
-  // applyMonthHighlight's `extraHover` arg. Unhover restores the lensMonth-
-  // only highlight.
-  chartEl.on('plotly_hover', evt => {
-    showCustomTooltip(tipBarHTML(evt, mode, primary), evt.event);
-    const pt = evt.points?.[0];
-    if (pt && pt.pointNumber != null) applyMonthHighlight({ pointIdx: pt.pointNumber });
-  });
-  chartEl.on('plotly_unhover', () => {
-    hideCustomTooltip();
-    applyMonthHighlight();
-  });
 
   // Initial paint: apply the current lensMonth highlight (no-op if unset).
   applyMonthHighlight();
 }
 
-// Build the bar-chart tooltip HTML. mode = 'single' | 'stacked'; primary is
-// the /api/monthly response (used to compute % of period total in stacked mode).
-function tipBarHTML(evt, mode, primary) {
-  const pt = evt.points?.[0];
-  if (!pt) return '';
-  const xRaw = pt.x;
-  const monthKey = typeof xRaw === 'string' && /^\d{4}-\d{2}$/.test(xRaw)
-    ? xRaw
-    : (() => { const d = new Date(xRaw); return isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; })();
-  const monthLabel = monthKey ? formatMonthLabel(monthKey) : '';
-  const value = fmt(pt.y || 0);
+// Bar-chart tooltip spec. mode = 'single' | 'stacked'; primary is the
+// /api/monthly response (for % of period total in stacked mode). Desktop only —
+// on mobile the bar has no tooltip (tap drills).
+function cjsTipBar(ctx, mode, primary) {
+  const dp = ctx.tooltip.dataPoints?.[0];
+  if (!dp) return null;
+  const period = dp.label;                       // YYYY-MM
+  const monthLabel = period ? formatMonthLabel(period) : '';
+  const value = fmt(dp.parsed.y || 0);
 
-  // Compare overlay (scatter trace).
-  if (pt.data?.type === 'scatter') {
-    return tipCard({
-      title: `vs ${formatMonthLabel(lensCompare)}`,
-      meta: monthLabel,
-      value,
-    });
+  // Compare overlay (the dashed line dataset).
+  if (dp.dataset._noHighlight) {
+    return { title: `vs ${formatMonthLabel(lensCompare)}`, meta: monthLabel, value };
   }
 
-  // Stacked bar — show parent (or child) emoji + name + % of period total
-  // baked into a single subtitle sentence (matches the pie tooltip wording).
+  // Stacked bar — segment emoji + name + % of period total in one subtitle.
   if (mode === 'stacked') {
-    const segName = pt.data?.name || '';
-    const row = primary.find(r => r.period === pt.x);
+    const segName = dp.dataset.label || '';
+    const row = primary.find(r => r.period === period);
     const periodTotal = row ? Object.values(row.totals || {}).reduce((a, b) => a + (b || 0), 0) : 0;
-    const pct = periodTotal > 0 ? Math.round((pt.y / periodTotal) * 100) : 0;
+    const pct = periodTotal > 0 ? Math.round((dp.parsed.y / periodTotal) * 100) : 0;
     const isOther = segName === 'Other';
-    const accentSlug = isOther ? 'default' : (segName ? catSlug(segName) : '');
-    const meta = (periodTotal > 0 && monthLabel)
-      ? `${pct}% of ${monthLabel} Spend`
-      : monthLabel;
-    return tipCard({
-      accentSlug,
+    return {
+      accentSlug: isOther ? 'default' : (segName ? catSlug(segName) : ''),
       title: segName ? (isOther ? escHtml(segName) : tipCatBadge(segName)) : '',
-      meta,
+      meta: (periodTotal > 0 && monthLabel) ? `${pct}% of ${monthLabel} Spend` : monthLabel,
       value,
-    });
+    };
   }
 
-  // Single-trace bar — accent matches the active scope's hue.
-  const accentSlug = lensLevel === 'all' ? '' : catSlug(lensCategory);
-  const titleHtml  = lensLevel === 'all' ? 'All Spending' : tipCatBadge(lensCategory);
-  return tipCard({ accentSlug, title: titleHtml, meta: monthLabel, value });
+  // Single bar — accent matches the active scope's hue.
+  return {
+    accentSlug: lensLevel === 'all' ? '' : catSlug(lensCategory),
+    title: lensLevel === 'all' ? 'All Spending' : tipCatBadge(lensCategory),
+    meta: monthLabel,
+    value,
+  };
 }
 
 
@@ -2351,7 +2418,7 @@ let catCompareMonth  = '';          // mirror of lensCompare (legacy reads)
 let catAllMonths     = [];
 let catDetailCache   = {};          // key: "level||category||month"
 let catBubblePositions = [];        // positions array for current bubble chart
-let catPrimaryBubbleTraceIdx = 0;   // trace index of primary (colored) bubbles
+let catPrimaryBubbleDsIdx = 0;      // Chart.js dataset index of primary (colored) bubbles
 
 function prevMonthStr(ym) {
   if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return '';
@@ -2422,7 +2489,9 @@ function buildCategoriesTabUI() {
             <p id="dd-compare-legend" class="hidden text-xs text-neutral-500 italic"></p>
           </div>
           <div class="flex-1 px-6 pb-6 pt-3">
-            <div id="dd-cumulative" class="w-full h-full" style="min-height:160px"></div>
+            <!-- Height is set in JS (renderDdCumulative) per viewport — Chart.js
+                 maintainAspectRatio:false fills this box, so it needs a definite height. -->
+            <div id="dd-cumulative" class="w-full"></div>
           </div>
         </div>
 
@@ -2570,12 +2639,11 @@ function renderDdPie(data, color) {
   // Sync the toggle UI to the current scope + childCount.
   updateDdPieToggleUI(level, childCount);
 
-  // Empty-data placeholder for non-all scopes — Plotly draws an empty hole
-  // otherwise, which reads as a bug.
+  // Empty-data placeholder for non-all scopes — an empty donut reads as a bug.
   if (level !== 'all' && (data.total || 0) === 0) {
     if (titleEl) titleEl.textContent = `${data.category} — ${monthLabel}`;
     if (pieEl) {
-      Plotly.purge('dd-pie');
+      destroyChart('dd-pie');
       pieEl.innerHTML = `<div class="h-full w-full flex items-center justify-center text-sm text-neutral-500">No spending in ${monthLabel}</div>`;
     }
     return;
@@ -2614,82 +2682,78 @@ function renderDdPie(data, color) {
 
   if (titleEl) titleEl.textContent = titleText;
 
-  // Restore canvas if a previous render swapped in a placeholder.
-  if (pieEl && !pieEl.querySelector('.plotly')) pieEl.innerHTML = '';
+  // Clear any leftover placeholder (from a prior empty-state render) so
+  // getChartCanvas can create a fresh canvas.
+  if (pieEl && !pieEl.querySelector('canvas')) pieEl.innerHTML = '';
 
   // Compositional views label every slice and act as a navigation surface.
   // Proportion mode + leaf scope keep clean (no labels, no click drill).
   const isComposition = (level === 'all') || (level === 'parent' && effectiveMode === 'composition');
+  const total = values.reduce((a, b) => a + (b || 0), 0);
 
-  Plotly.newPlot('dd-pie', [{
-    type: 'pie',
-    values,
-    labels,
-    hole: 0.6,
-    textinfo: isComposition ? 'label+percent' : 'none',
-    textposition: 'outside',
-    outsidetextfont: { size: 12 },
-    automargin: true,
-    hoverinfo: 'none',
-    marker: { colors },
-    showlegend: false,
-  }], {
-    ...plotlyLayout(),
-    margin: { t: 16, r: 60, b: 16, l: 60 },
-    paper_bgcolor: 'transparent',
-    plot_bgcolor:  'transparent',
-  }, PLOTLY_CONFIG);
-  setChartA11y('dd-pie', `${data.category || 'All spending'} composition donut, ${labels.length} segment${labels.length !== 1 ? 's' : ''}`);
-
-  // Click-to-drill on compositional pies: parent slices → drill into parent;
-  // child slices → drill into leaf. "Other" rollup at all-scope is a no-op
-  // (synthetic top-N rollup, not a real category).
-  pieEl?.on('plotly_click', evt => {
-    if (!isComposition) return;
-    const sliceLabel = evt.points?.[0]?.label;
-    if (!sliceLabel) return;
-    if (level === 'all') {
-      if (sliceLabel === 'Other') return;
-      setScopeParent(sliceLabel);
-    } else if (level === 'parent') {
-      setScopeLeaf(sliceLabel);
-    }
+  const base = chartLayout();
+  mountChart('dd-pie', {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors,
+        borderColor: token('color-white'),
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      ...base,
+      cutout: '60%',
+      // Outside labels (composition) need breathing room around the donut.
+      layout: { padding: isComposition ? 28 : 8 },
+      scales: {},   // doughnut has no axes
+      onClick: (evt, elements) => {
+        // Click-to-drill on compositional donuts: all → parent, parent → leaf.
+        // "Other" rollup at all-scope is a no-op (synthetic top-N bucket).
+        if (!isComposition || !elements.length) return;
+        const sliceLabel = labels[elements[0].index];
+        if (!sliceLabel) return;
+        if (level === 'all') { if (sliceLabel !== 'Other') setScopeParent(sliceLabel); }
+        else if (level === 'parent') setScopeLeaf(sliceLabel);
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false, external: makeTipExternal(cjsTipPie) },
+        datalabels: isComposition ? {
+          display: (ctx) => total > 0 && (ctx.dataset.data[ctx.dataIndex] / total) >= 0.04,
+          anchor: 'end', align: 'end', offset: 6,
+          color: token('color-gray-700'),
+          font: { size: 11, weight: '600' },
+          formatter: (value, ctx) => {
+            const label = ctx.chart.data.labels[ctx.dataIndex];
+            const pct = total > 0 ? Math.round((value / total) * 100) : 0;
+            return `${label}\n${pct}%`;
+          },
+        } : { display: false },
+      },
+    },
   });
-
-  // Custom tooltip wiring.
-  pieEl?.on('plotly_hover',   evt => showCustomTooltip(tipPieHTML(evt), evt.event));
-  pieEl?.on('plotly_unhover', () => hideCustomTooltip());
+  setChartA11y('dd-pie', `${data.category || 'All spending'} composition donut, ${labels.length} segment${labels.length !== 1 ? 's' : ''}`);
 }
 
-// Pie tooltip — handles compositional ("Other"/named slice) and proportion
-// ("Rest of month") cases. Plotly emits `pt.percent` as 0..1.
-function tipPieHTML(evt) {
-  const pt = evt.points?.[0];
-  if (!pt) return '';
-  const sliceLabel = pt.label || '';
-  const value = fmt(pt.value || 0);
-  // hoverinfo:'none' on the pie trace strips Plotly's per-event `percent`
-  // field, so compute it ourselves from the trace's full values array.
-  const allValues = pt.data?.values || [];
+// Pie tooltip spec — handles compositional ("Other"/named slice) and proportion
+// ("Rest of month") cases. Percent is computed from the dataset total.
+function cjsTipPie(ctx) {
+  const dp = ctx.tooltip.dataPoints?.[0];
+  if (!dp) return null;
+  const sliceLabel = dp.label || '';
+  const value = fmt(dp.parsed || 0);
+  const allValues = dp.dataset.data || [];
   const total = allValues.reduce((a, b) => a + (b || 0), 0);
-  const pct = total > 0 ? Math.round((pt.value / total) * 100) : 0;
+  const pct = total > 0 ? Math.round((dp.parsed / total) * 100) : 0;
   const monthLabel = lensMonth ? formatMonthLabel(lensMonth) : '';
-  const meta = monthLabel
-    ? `${pct}% of Total ${monthLabel} Spend`
-    : `${pct}% of Total Spend`;
+  const meta = monthLabel ? `${pct}% of Total ${monthLabel} Spend` : `${pct}% of Total Spend`;
 
-  if (sliceLabel === 'Rest of month') {
-    return tipCard({ title: 'Rest of month', meta, value });
-  }
-  if (sliceLabel === 'Other') {
-    return tipCard({ accentSlug: 'default', title: 'Other', meta, value });
-  }
-  return tipCard({
-    accentSlug: catSlug(sliceLabel),
-    title: tipCatBadge(sliceLabel),
-    meta,
-    value,
-  });
+  if (sliceLabel === 'Rest of month') return { title: 'Rest of month', meta, value };
+  if (sliceLabel === 'Other')        return { accentSlug: 'default', title: 'Other', meta, value };
+  return { accentSlug: catSlug(sliceLabel), title: tipCatBadge(sliceLabel), meta, value };
 }
 
 // Show/hide and style the Proportion/Composition toggle. `level` is the
@@ -2861,110 +2925,112 @@ function renderDdLocations(locations, color, level = 'leaf') {
 
 function renderDdCumulative(data, compareData, color) {
   hideCustomTooltip();
-  const traces = [];
 
-  // Numeric day-of-month — matches the bubble chart's x-axis so both charts
-  // read as the same calendar.
+  // Numeric day-of-month axis (1..daysInMonth) — matches the bubble chart's
+  // calendar so both read alike. Series are mapped onto that day index, padded
+  // with null past their last posted day so the line stops cleanly.
   const [yr, mo] = data.year_month.split('-').map(Number);
   const daysInMonth = new Date(yr, mo, 0).getDate();
-  const dayNums = data.cumulative_spend.map(d => parseInt(d.date.split('-')[2], 10));
+  const labels = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
-  traces.push({
-    type: 'scatter',
-    mode: 'lines+markers',
-    name: formatMonthLabel(data.year_month),
-    x: dayNums,
-    y: data.cumulative_spend.map(d => d.cumulative),
-    line:   { color, width: 2.5 },
-    // Markers invisible at baseline; the hover handler restyles the hovered
-    // point's size + opacity so a single tracking dot snaps to the cursor.
-    marker: { color, size: 0, opacity: 0, line: { color: token('color-white'), width: 2 } },
-    hoverinfo: 'none',
-    showlegend: !!compareData,
-  });
+  const seriesByDay = (rows) => {
+    const arr = Array(daysInMonth).fill(null);
+    rows.forEach(d => { arr[parseInt(d.date.split('-')[2], 10) - 1] = d.cumulative; });
+    return arr;
+  };
+
+  const datasets = [{
+    label: formatMonthLabel(data.year_month),
+    data: seriesByDay(data.cumulative_spend),
+    borderColor: color,
+    borderWidth: 2.5,
+    pointRadius: 0,            // baseline: no dots — the hover dot is drawn natively
+    pointHoverRadius: 9,
+    pointHoverBackgroundColor: color,
+    pointHoverBorderColor: token('color-white'),
+    pointHoverBorderWidth: 2,
+    tension: 0,
+    spanGaps: true,
+    _compare: false,
+  }];
 
   const legendEl = document.getElementById('dd-compare-legend');
   if (legendEl) legendEl.classList.add('hidden');
 
   if (compareData) {
-    const cDayNums = compareData.cumulative_spend.map(d => parseInt(d.date.split('-')[2], 10));
-    traces.push({
-      type: 'scatter',
-      mode: 'lines',
-      name: formatMonthLabel(compareData.year_month),
-      x: cDayNums,
-      y: compareData.cumulative_spend.map(d => d.cumulative),
-      line: { color: token('color-gray-400'), width: 2, dash: 'dot' },
-      hoverinfo: 'none',
+    datasets.push({
+      label: formatMonthLabel(compareData.year_month),
+      data: seriesByDay(compareData.cumulative_spend),
+      borderColor: token('color-gray-400'),
+      borderWidth: 2,
+      borderDash: [2, 2],
+      pointRadius: 0,
+      pointHoverRadius: 0,     // compare overlay has no tracking dot (matches old 'lines' mode)
+      tension: 0,
+      spanGaps: true,
+      _compare: true,
     });
   }
 
-  Plotly.newPlot('dd-cumulative', traces, {
-    ...plotlyLayout(),
-    xaxis: {
-      range:     [0.5, daysInMonth + 0.5],
-      tickmode:  'array',
-      tickvals:  Array.from({ length: daysInMonth }, (_, i) => i + 1),
-      ticktext:  Array.from({ length: daysInMonth }, (_, i) => `${MONTH_LABELS[mo - 1]} ${i + 1}`),
-      tickfont:  { size: 10 },
-      tickangle: -45,
-      gridcolor: token('color-gray-100'),
-      title:     { text: '', standoff: 4 },
-      automargin: true,
-    },
-    yaxis: {
-      tickformat: '$,.0f',
-      tickfont: { size: 12 },
-      gridcolor: token('color-gray-100'),
-    },
-    margin: { t: 8, r: 16, b: 56, l: 60 },
-    showlegend: !!compareData,
-    legend: compareData ? { orientation: 'h', y: -0.35, font: { size: 12 } } : undefined,
-  }, PLOTLY_CONFIG);
-  setChartA11y('dd-cumulative', `${data.category || 'All spending'} cumulative spend by day${compareData ? ', with prior-period overlay' : ''}`);
+  // Explicit height — Chart.js (maintainAspectRatio:false) fills this box.
+  const cumEl = document.getElementById('dd-cumulative');
+  if (cumEl) cumEl.style.height = (window.innerWidth < 768 ? 200 : 220) + 'px';
 
-  const ptCount = data.cumulative_spend.length;
-  const cumEl   = document.getElementById('dd-cumulative');
-  cumEl?.on('plotly_hover', evt => {
-    showCustomTooltip(tipCumulHTML(evt), evt.event);
-    const pt = evt.points?.[0];
-    if (!pt || pt.curveNumber !== 0 || pt.pointNumber == null) return;
-    const sizes  = Array(ptCount).fill(0); sizes[pt.pointNumber]  = 9;
-    const opaArr = Array(ptCount).fill(0); opaArr[pt.pointNumber] = 1;
-    Plotly.restyle('dd-cumulative',
-      { 'marker.size': [sizes], 'marker.opacity': [opaArr] }, [0]);
+  const base = chartLayout();
+  mountChart('dd-cumulative', {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      ...base,
+      interaction: { mode: 'nearest', intersect: false },
+      scales: {
+        x: { ...base.scales.x,
+             ticks: { ...base.scales.x.ticks,
+                      maxRotation: 45, minRotation: 45,
+                      callback: (v, i) => `${MONTH_LABELS[mo - 1]} ${labels[i]}` } },
+        y: { ...base.scales.y, beginAtZero: true },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false, external: makeTipExternal(cjsTipCumul) },
+      },
+    },
   });
-  cumEl?.on('plotly_unhover', () => {
-    hideCustomTooltip();
-    Plotly.restyle('dd-cumulative',
-      { 'marker.size': [Array(ptCount).fill(0)], 'marker.opacity': [Array(ptCount).fill(0)] }, [0]);
-  });
+  setChartA11y('dd-cumulative', `${data.category || 'All spending'} cumulative spend by day${compareData ? ', with prior-period overlay' : ''}`);
 }
 
-// Cumulative line tooltip — distinguishes the primary line from the compare overlay
-// (compare has line.dash === 'dot' in this chart).
-function tipCumulHTML(evt) {
-  const pt = evt.points?.[0];
-  if (!pt) return '';
-  const isCompare = pt.data?.line?.dash === 'dot';
-  const value = fmt(pt.y || 0);
-  return tipCard({
-    title: `Day ${pt.x}`,
-    meta: pt.data?.name || '',
-    value: isCompare ? `Last month: ${value}` : value,
-  });
+// Cumulative line tooltip spec — distinguishes the primary line from the dotted
+// compare overlay (dataset._compare flag).
+function cjsTipCumul(ctx) {
+  const dp = ctx.tooltip.dataPoints?.[0];
+  if (!dp) return null;
+  const ds = dp.dataset;
+  const value = fmt(dp.parsed.y || 0);
+  return {
+    title: `Day ${dp.label}`,
+    meta: ds.label || '',
+    value: ds._compare ? `Last month: ${value}` : value,
+  };
 }
 
 function renderDdBubble(data, compareData, color) {
   hideCustomTooltip();
-  const txns = data.transactions;
   catBubblePositions = [];
 
+  // Mobile (<768px): the bubble layout is too dense to tap — swap in the
+  // daily-totals strip (M8) and bail. The matchMedia listener re-renders on
+  // breakpoint cross, so resizing across 768 swaps the two cleanly.
+  if (window.innerWidth < 768) { renderDdDailyStrip(data, color); return; }
+
+  const bubEl = document.getElementById('dd-bubble');
+  const txns = data.transactions;
   if (!txns || !txns.length) {
-    document.getElementById('dd-bubble').innerHTML =
-      '<p class="text-xs text-neutral-500 text-center pt-10">No transactions</p>';
+    destroyChart('dd-bubble');
+    if (bubEl) bubEl.innerHTML = '<p class="text-xs text-neutral-500 text-center pt-10">No transactions</p>';
     return;
   }
+  // Clear any leftover placeholder/strip so getChartCanvas builds a fresh canvas.
+  if (bubEl && !bubEl.querySelector('canvas')) bubEl.innerHTML = '';
 
   const GAP      = 4;   // px gap between touching bubbles
   const MIN_SIZE = 10;  // px minimum diameter
@@ -2972,18 +3038,17 @@ function renderDdBubble(data, compareData, color) {
   const MARGIN_B = 16;  // px bottom margin
 
   const compareTxns = compareData && compareData.transactions ? compareData.transactions : [];
-
-  // Shared scale across both months so sizes are comparable
   const maxAmt = Math.max(...txns.map(t => t.amount), ...compareTxns.map(t => t.amount));
 
-  // Helper: stack transactions per day into pixel coordinates
+  // Stack transactions per day into pixel coordinates (unchanged from v1 —
+  // Chart.js's bubble type can't do per-day pixel stacking, so we keep the math
+  // and feed Chart.js the resulting x/y/r directly).
   function stackPositions(transactions) {
     const positions = [];
     const byDay = {};
     transactions.forEach((t, i) => {
       const day = parseInt(t.date.split('-')[2], 10);
-      if (!byDay[day]) byDay[day] = [];
-      byDay[day].push({ ...t, origIndex: i });
+      (byDay[day] ||= []).push({ ...t, origIndex: i });
     });
     Object.entries(byDay).forEach(([day, dayTxns]) => {
       dayTxns.sort((a, b) => b.amount - a.amount);
@@ -3022,135 +3087,153 @@ function renderDdBubble(data, compareData, color) {
     }
   }
 
-  // Dynamic height: tallest stack across both sets
+  // Dynamic height: tallest stack across both sets (y is a pixel coordinate).
   const allPositions = [...catBubblePositions, ...comparePositions];
   const maxY = Math.max(...allPositions.map(p => p.y + p.size / 2));
   const chartH = Math.max(220, Math.ceil(maxY) + 24);
-  document.getElementById('dd-bubble').style.height = chartH + 'px';
+  if (bubEl) bubEl.style.height = chartH + 'px';
 
   const [yr, mo] = data.year_month.split('-').map(Number);
   const daysInMonth = new Date(yr, mo, 0).getDate();
 
-  const traces = [];
+  const toPoints = (positions, extra = {}) => positions.map(p => ({
+    x: p.x, y: p.y, r: p.size / 2,
+    name: p.name, amountStr: fmt(p.amount), date: p.date,
+    origIndex: p.origIndex, ...extra,
+  }));
 
-  // Compare trace (grey, rendered behind primary)
+  const datasets = [];
+  // Compare dataset (grey) — pushed first so it draws behind the primary.
   if (comparePositions.length) {
-    traces.push({
-      type: 'scatter',
-      mode: 'markers',
-      name: formatMonthLabel(compareData.year_month),
-      x: comparePositions.map(p => p.x),
-      y: comparePositions.map(p => p.y),
-      marker: {
-        size:     comparePositions.map(p => p.size),
-        sizemode: 'diameter',
-        color:    token('color-gray-400'),
-        opacity:  0.45,
-        line:     { color: 'rgba(255,255,255,0.7)', width: 1 },
-      },
-      customdata: comparePositions.map(p => ({
-        name:      p.name,
-        amountStr: fmt(p.amount),
-        date:      p.date,
-        dow:       DOW_LABELS[new Date(p.date + 'T12:00:00').getDay()],
-        isCompare: true,
-      })),
-      hoverinfo: 'none',
-      showlegend: false,
-      cliponaxis: false,
+    datasets.push({
+      label: formatMonthLabel(compareData.year_month),
+      data: toPoints(comparePositions, { isCompare: true }),
+      backgroundColor: hexToRgba(token('color-gray-400'), 0.45),
+      borderColor: 'rgba(255,255,255,0.7)', borderWidth: 1,
+      _noHighlight: true,
     });
   }
-
-  // Primary trace (colored, on top)
-  const primaryTraceIdx = traces.length;
-  catPrimaryBubbleTraceIdx = primaryTraceIdx;
-  traces.push({
-    type: 'scatter',
-    mode: 'markers',
-    x: catBubblePositions.map(p => p.x),
-    y: catBubblePositions.map(p => p.y),
-    marker: {
-      size:     catBubblePositions.map(p => p.size),
-      sizemode: 'diameter',
-      color:    color,
-      opacity:  0.72,
-      line:     { color: 'rgba(255,255,255,0.9)', width: 1.5 },
-    },
-    customdata: catBubblePositions.map(p => ({
-      name:       p.name,
-      amountStr:  fmt(p.amount),
-      date:       p.date,
-      dow:        DOW_LABELS[new Date(p.date + 'T12:00:00').getDay()],
-      origIndex:  p.origIndex,
-    })),
-    hoverinfo: 'none',
-    showlegend: false,
-    cliponaxis: false,
+  // Primary dataset (colored, on top). Per-point backgroundColor array so the
+  // hover-sync helpers can dim/lift individual bubbles.
+  catPrimaryBubbleDsIdx = datasets.length;
+  const base = hexToRgba(color, 0.72);
+  datasets.push({
+    label: formatMonthLabel(data.year_month),
+    data: toPoints(catBubblePositions),
+    backgroundColor: catBubblePositions.map(() => base),
+    borderColor: 'rgba(255,255,255,0.9)', borderWidth: 1.5,
+    _base: base, _full: hexToRgba(color, 1), _dim: hexToRgba(color, 0.18),
   });
 
-  Plotly.newPlot('dd-bubble', traces, {
-    ...plotlyLayout(),
-    xaxis: {
-      range:     [0.5, daysInMonth + 0.5],
-      tickmode:  'array',
-      tickvals:  Array.from({ length: daysInMonth }, (_, i) => i + 1),
-      ticktext:  Array.from({ length: daysInMonth }, (_, i) => `${MONTH_LABELS[mo - 1]} ${i + 1}`),
-      tickfont:  { size: 10 },
-      gridcolor: token('color-gray-100'),
-      title:     { text: '', standoff: 4 },
+  const layoutBase = chartLayout();
+  const chart = mountChart('dd-bubble', {
+    type: 'bubble',
+    data: { datasets },
+    options: {
+      ...layoutBase,
+      interaction: { mode: 'nearest', intersect: true },
+      scales: {
+        x: { type: 'linear', min: 0.5, max: daysInMonth + 0.5,
+             grid: { display: false },
+             ticks: { color: token('color-gray-500'), font: { size: 10 },
+                      stepSize: 1, autoSkip: true, maxTicksLimit: 10,
+                      callback: (v) => Number.isInteger(v) ? `${MONTH_LABELS[mo - 1]} ${v}` : '' } },
+        y: { min: 0, max: chartH, display: false },
+      },
+      onHover: (evt, els, ch) => {
+        const el = els.find(e => e.datasetIndex === catPrimaryBubbleDsIdx);
+        const idx = el ? (catBubblePositions[el.index]?.origIndex ?? -1) : -1;
+        if (ch.$lastBubble === idx) return;
+        ch.$lastBubble = idx;
+        if (idx >= 0) highlightBubble(idx); else clearBubbleHighlight();
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false, external: makeTipExternal(cjsTipBubble) },
+      },
     },
-    yaxis: {
-      range:       [0, chartH],
-      visible:     false,
-      fixedrange:  true,
-    },
-    margin:    { t: 28, r: 28, b: 44, l: 28 },
-    hovermode: 'closest',
-  }, PLOTLY_CONFIG);
+  });
+  if (chart) chart.$lastBubble = -1;
   setChartA11y('dd-bubble', `${data.category || 'All spending'} merchants by day, ${MONTH_LABELS[mo - 1]} ${yr}, bubble chart`);
-
-  // Hover does three things in tandem:
-  //   1. Show our custom DOM tooltip with merchant + date + amount
-  //   2. Highlight the matching table row (primary bubbles only)
-  //   3. Dim non-hovered primary bubbles (primary bubbles only)
-  document.getElementById('dd-bubble').on('plotly_hover', evtData => {
-    showCustomTooltip(tipBubbleHTML(evtData), evtData.event);
-
-    const pt = evtData.points[0];
-    if (pt.curveNumber !== primaryTraceIdx) return; // table/dim effects: primary only
-    const idx = pt.customdata.origIndex;
-
-    document.querySelectorAll('#dd-table-body tr').forEach(row => {
-      row.classList.toggle('bg-neutral-100', Number(row.dataset.idx) === idx);
-    });
-
-    const opacities = catBubblePositions.map(p => p.origIndex === idx ? 1.0 : 0.18);
-    Plotly.restyle('dd-bubble', { 'marker.opacity': [opacities] }, [primaryTraceIdx]);
-  });
-
-  document.getElementById('dd-bubble').on('plotly_unhover', () => {
-    hideCustomTooltip();
-    document.querySelectorAll('#dd-table-body tr').forEach(r => r.classList.remove('bg-neutral-100'));
-    if (catBubblePositions.length) {
-      Plotly.restyle('dd-bubble', {
-        'marker.opacity': [Array(catBubblePositions.length).fill(0.72)],
-      }, [primaryTraceIdx]);
-    }
-  });
 }
 
-// Bubble tooltip — pulls merchant + date metadata from each point's customdata.
-function tipBubbleHTML(evt) {
-  const pt = evt.points?.[0];
-  if (!pt) return '';
-  const cd = pt.customdata || {};
-  const name = cd.name || '';
-  const meta = formatBubbleDate(cd.date);
-  return tipCard({
-    title: escHtml(name),
-    meta,
-    value: cd.amountStr || fmt(pt.y || 0),
+// Bubble↔table hover sync (both directions call these). Lift the matching
+// primary bubble + its table row; dim the rest.
+function highlightBubble(idx) {
+  document.querySelectorAll('#dd-table-body tr').forEach(row => {
+    row.classList.toggle('bg-neutral-100', Number(row.dataset.idx) === idx);
   });
+  const chart = _charts['dd-bubble'];
+  if (!chart || !catBubblePositions.length) return;
+  const ds = chart.data.datasets[catPrimaryBubbleDsIdx];
+  if (!ds) return;
+  ds.backgroundColor = catBubblePositions.map(p => p.origIndex === idx ? ds._full : ds._dim);
+  chart.update('none');
+}
+function clearBubbleHighlight() {
+  document.querySelectorAll('#dd-table-body tr').forEach(r => r.classList.remove('bg-neutral-100'));
+  const chart = _charts['dd-bubble'];
+  if (!chart || !catBubblePositions.length) return;
+  const ds = chart.data.datasets[catPrimaryBubbleDsIdx];
+  if (!ds) return;
+  ds.backgroundColor = catBubblePositions.map(() => ds._base);
+  chart.update('none');
+}
+
+// Mobile-only daily-totals strip (M8): one thin bar per day-of-month, derived by
+// first-differencing the cumulative_spend series. Purely visual — no tooltip, no
+// click. Replaces the bubble chart below 768px.
+function renderDdDailyStrip(data, color) {
+  const el = document.getElementById('dd-bubble');
+  if (!el) return;
+  if (el.querySelector && !el.querySelector('canvas')) el.innerHTML = '';
+
+  const [yr, mo] = data.year_month.split('-').map(Number);
+  const daysInMonth = new Date(yr, mo, 0).getDate();
+
+  // Forward-fill the cumulative series across every day, then diff into per-day spend.
+  const cum = Array(daysInMonth).fill(null);
+  (data.cumulative_spend || []).forEach(d => {
+    const di = parseInt(d.date.split('-')[2], 10) - 1;
+    if (di >= 0 && di < daysInMonth) cum[di] = d.cumulative;
+  });
+  let last = 0;
+  const cumFilled = cum.map(v => (v != null ? (last = v) : last));
+  const dayTotals = cumFilled.map((v, i) => Math.max(0, i === 0 ? v : v - cumFilled[i - 1]));
+  const labels = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+  el.style.height = '80px';
+
+  mountChart('dd-bubble', {
+    type: 'bar',
+    data: { labels, datasets: [{ data: dayTotals, backgroundColor: color,
+                                 categoryPercentage: 1.0, barPercentage: 0.9 }] },
+    options: {
+      layout: { padding: { left: 0, right: 0, top: 4, bottom: 0 } },
+      events: [],   // purely visual — no hover/click handling
+      scales: {
+        x: { grid: { display: false },
+             ticks: { color: token('color-gray-500'), font: { size: 10 },
+                      autoSkip: false,
+                      callback: (v, i) => (i % 7 === 0 ? labels[i] : '') } },
+        y: { display: false, beginAtZero: true },
+      },
+      plugins: { legend: { display: false }, tooltip: { enabled: false }, datalabels: { display: false } },
+    },
+  });
+  setChartA11y('dd-bubble', `${data.category || 'All spending'} daily spend strip, ${MONTH_LABELS[mo - 1]} ${yr}`);
+}
+
+// Bubble tooltip spec — merchant + date + amount from the point's custom fields.
+function cjsTipBubble(ctx) {
+  const dp = ctx.tooltip.dataPoints?.[0];
+  if (!dp) return null;
+  const raw = dp.raw || {};
+  return {
+    title: escHtml(raw.name || ''),
+    meta: formatBubbleDate(raw.date),
+    value: raw.amountStr || fmt(raw.y || 0),
+  };
 }
 
 // Radial tooltip — year + month name + dollar value.
@@ -3238,17 +3321,8 @@ function renderDdTable(data, compareData) {
         `;
 
         if (isPrimary) {
-          tr.addEventListener('mouseenter', () => {
-            if (!catBubblePositions.length) return;
-            const opacities = catBubblePositions.map(p => p.origIndex === i ? 1.0 : 0.18);
-            Plotly.restyle('dd-bubble', { 'marker.opacity': [opacities] }, [catPrimaryBubbleTraceIdx]);
-          });
-          tr.addEventListener('mouseleave', () => {
-            if (!catBubblePositions.length) return;
-            Plotly.restyle('dd-bubble', {
-              'marker.opacity': [Array(catBubblePositions.length).fill(0.72)],
-            }, [catPrimaryBubbleTraceIdx]);
-          });
+          tr.addEventListener('mouseenter', () => highlightBubble(i));
+          tr.addEventListener('mouseleave', () => clearBubbleHighlight());
         }
 
         tbody.appendChild(tr);
@@ -3476,7 +3550,7 @@ function closeTxnPanel() {
   _txnPanelOpener = null;
 }
 
-document.getElementById('txn-panel-close').addEventListener('click', closeTxnPanel);
+document.getElementById('txn-panel-close')?.addEventListener('click', closeTxnPanel);
 // Escape closes the panel from anywhere when it's open.
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
@@ -3497,4 +3571,6 @@ function escHtml(str) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-showTab('overview');
+// The chart playground skips the live-app boot — it drives render functions
+// directly against static persona JSON.
+if (!window.__CHART_PLAYGROUND__) showTab('overview');

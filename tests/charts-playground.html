@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Charts Playground — MoneyHabits</title>
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
+
+  <!-- Same styles the live app uses: Tailwind utilities + tokens + .ct-tip styles -->
+  <link rel="stylesheet" href="/static/css/tailwind.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    body { font-family: Inter, -apple-system, system-ui, sans-serif; background: #f8f8f9; margin: 0; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 16px 16px 120px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-top: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .card h2 { font-size: 15px; font-weight: 600; color: #111827; margin: 0 0 4px; }
+    .card p.sub { font-size: 12px; color: #6b7280; margin: 0 0 12px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .controls button, .controls select {
+      font: 500 13px Inter, system-ui, sans-serif; padding: 5px 10px; border-radius: 8px;
+      border: 1px solid #d1d5db; background: #fff; color: #374151; cursor: pointer;
+    }
+    .controls button.active { background: #eef2ff; border-color: #6366f1; color: #4338ca; }
+    h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 4px 0 0; }
+    .hint { font-size: 12px; color: #6b7280; margin: 2px 0 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Charts Playground</h1>
+    <p class="hint">Chart.js conversions (M8) driven by the static <code>/api/&lt;persona&gt;</code> JSON tree. Resize across 768px to see the bubble chart swap to the mobile daily strip.</p>
+
+    <div class="controls" style="margin-top: 12px;">
+      <label style="font-size:13px;color:#374151;align-self:center;">Persona:</label>
+      <select id="persona">
+        <option value="student">NYC Student</option>
+        <option value="young-pro">NYC Young Professional</option>
+      </select>
+      <label style="font-size:13px;color:#374151;align-self:center;margin-left:8px;">Month:</label>
+      <select id="month"></select>
+    </div>
+
+    <!-- 1. Overview cumulative line -->
+    <div class="card">
+      <h2>1 · Overview cumulative line</h2>
+      <p class="sub">This month vs last month · tap/hover a point for the tooltip</p>
+      <div id="overview-chart-card"></div>
+    </div>
+
+    <!-- 2. Habits trend bar -->
+    <div class="card">
+      <h2>2 · Habits trend bar</h2>
+      <p class="sub">Stacked modes show a legend (color key + tap-to-drill). Tap a bar to drill / focus.</p>
+      <div class="controls" id="habits-scope">
+        <button data-scope="all-total" class="active">All · total</button>
+        <button data-scope="all-stacked">All · stacked</button>
+        <button data-scope="parent-total">Food &amp; Drink · total</button>
+        <button data-scope="leaf">Groceries · leaf</button>
+      </div>
+      <div id="chart-monthly" class="w-full"></div>
+    </div>
+
+    <!-- 3. Drill-down donut -->
+    <div class="card">
+      <h2>3 · Drill-down donut</h2>
+      <p class="sub">Composition labels via datalabels · tap a slice for the tooltip</p>
+      <div class="controls" id="dd-scope">
+        <button data-dd="all" class="active">All (by parent)</button>
+        <button data-dd="parent">Food &amp; Drink</button>
+        <button data-dd="leaf">Groceries</button>
+      </div>
+      <div class="controls" id="pie-mode">
+        <button data-mode="proportion" class="active">Proportion</button>
+        <button data-mode="composition">Composition</button>
+      </div>
+      <div id="dd-pie" class="w-full" style="height:300px"></div>
+    </div>
+
+    <!-- 4. Drill-down cumulative line -->
+    <div class="card">
+      <h2>4 · Drill-down cumulative line</h2>
+      <p class="sub">Cumulative spend across the focused month</p>
+      <div id="dd-cumulative" class="w-full"></div>
+    </div>
+
+    <!-- 5. Bubble (desktop) / 6. Daily strip (mobile) -->
+    <div class="card">
+      <h2>5 · Bubble chart <span style="font-weight:400;color:#9ca3af">(desktop)</span> / 6 · Daily strip <span style="font-weight:400;color:#9ca3af">(mobile &lt;768px)</span></h2>
+      <p class="sub">Hover a bubble or a (hidden here) table row to see the bubble↔table link on desktop</p>
+      <div id="dd-bubble-legend" class="hidden flex items-center gap-4 text-xs text-neutral-500"></div>
+      <div id="dd-bubble" class="w-full"></div>
+      <!-- present so the bubble↔table hover-sync code has a target -->
+      <table style="display:none"><tbody id="dd-table-body"></tbody></table>
+    </div>
+  </div>
+
+  <!-- Shared tooltip targets (live app provides these in base.html). -->
+  <div id="ct-tip" class="hidden fixed pointer-events-none z-50"></div>
+  <div id="cjs-tip" class="hidden fixed pointer-events-none z-50"></div>
+
+  <!-- Load order matches base.html: Chart.js + datalabels, then app.js. The flag
+       tells app.js to skip its live-app boot so we can drive render fns directly. -->
+  <script>window.__CHART_PLAYGROUND__ = true;</script>
+  <script src="/static/js/chart.umd.min.js"></script>
+  <script src="/static/js/chartjs-plugin-datalabels.min.js"></script>
+  <script src="/static/js/app.js"></script>
+
+  <script>
+  (() => {
+    const realFetch = window.fetch.bind(window);
+    let PERSONA = 'student';
+
+    // Slugify a category name the same way build_static.scope_slug does
+    // ("Food & Drink" → "food-and-drink", "Gas & Electric" → "gas-and-electric").
+    const slugify = (s) => String(s).toLowerCase().replace(/&/g, 'and')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+    // Map the live Flask-style endpoints renderHabitsChart / loadCategoryMeta hit
+    // onto the static persona tree. Only the endpoints the playground exercises.
+    // Returns { file, unwrap } — `unwrap` extracts the array the v1 render fns
+    // expect (the live /api/monthly returns a bare array; the static file wraps
+    // it as { granularity, periods: [...] }).
+    function mapApi(url) {
+      const [path, query] = url.split('?');
+      const q = new URLSearchParams(query || '');
+      if (path === '/api/category-meta') return { file: `/api/${PERSONA}/category-meta.json` };
+      if (path === '/api/monthly') {
+        const gran = q.get('granularity') || 'month';
+        let file;
+        if (q.get('group_by') === 'parent' && !q.get('parent')) file = `/api/${PERSONA}/monthly-all-month-by-parent.json`;
+        else if (q.get('parent'))     file = `/api/${PERSONA}/monthly-parent-${slugify(q.get('parent'))}-${gran}.json`;
+        else if (q.get('categories')) file = `/api/${PERSONA}/monthly-leaf-${slugify(q.get('categories'))}-${gran}.json`;
+        else file = `/api/${PERSONA}/monthly-all-${gran}.json`;
+        return { file, unwrap: (j) => j.periods };
+      }
+      return null;
+    }
+    window.fetch = async (url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/')) {
+        const m = mapApi(url);
+        if (m) {
+          const res = await realFetch(m.file, opts);
+          if (!m.unwrap || !res.ok) return res;
+          const body = m.unwrap(await res.json());
+          return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+      }
+      return realFetch(url, opts);
+    };
+
+    const getJson = (file) => realFetch(`/api/${PERSONA}/${file}`).then(r => r.json());
+
+    let CURRENT_MONTH = null;
+    let HABITS_SCOPE = 'all-total';
+    let DD_SCOPE = 'all';
+
+    async function renderHabits() {
+      // Reset lens state for the chosen scope, then call the real render fn.
+      lensTimeframe = 'last-12-months';
+      chartType = 'bar';
+      lensCompare = '';
+      lensMonth = CURRENT_MONTH || '';
+      if (HABITS_SCOPE === 'all-total')      { lensLevel = 'all';    lensCategory = '';            lensChartView = 'total'; }
+      else if (HABITS_SCOPE === 'all-stacked'){ lensLevel = 'all';    lensCategory = '';            lensChartView = 'stacked'; }
+      else if (HABITS_SCOPE === 'parent-total'){ lensLevel = 'parent'; lensCategory = 'Food & Drink'; lensChartView = 'total'; }
+      else                                    { lensLevel = 'leaf';   lensCategory = 'Groceries';   lensChartView = 'total'; }
+      await renderHabitsChart();
+    }
+
+    async function renderOverview() {
+      const snapAll = await getJson('overview-snapshot.json');
+      const snap = snapAll.months[CURRENT_MONTH] || Object.values(snapAll.months)[0];
+      renderOverviewLineChart(snap);
+    }
+
+    async function renderDrill() {
+      const file = DD_SCOPE === 'all' ? 'category-detail-all.json'
+                 : DD_SCOPE === 'parent' ? 'category-detail-parent-food-and-drink.json'
+                 : 'category-detail-leaf-groceries.json';
+      const detailAll = await getJson(file);
+      const detail = detailAll.months[CURRENT_MONTH] || Object.values(detailAll.months)[0];
+      lensMonth = CURRENT_MONTH || '';
+      const color = DD_SCOPE === 'leaf' ? catHex('Groceries', 'mid')
+                  : DD_SCOPE === 'parent' ? catHex('Food & Drink', 'mid')
+                  : token('color-accent-700');
+      renderDdPie(detail, color);
+      renderDdCumulative(detail, null, color);
+      renderDdBubble(detail, null, color);   // <768px → daily strip
+    }
+
+    function wireToggle(groupId, attr, onPick) {
+      document.querySelectorAll(`#${groupId} button`).forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll(`#${groupId} button`).forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          onPick(btn.dataset[attr]);
+        });
+      });
+    }
+
+    async function init() {
+      PERSONA = document.getElementById('persona').value;
+      await loadCategoryMeta();   // hydrate _catMeta so category colors/emoji resolve
+
+      const monthsRaw = await getJson('months.json');
+      const months = Array.isArray(monthsRaw) ? monthsRaw : (monthsRaw.months || []);
+      const monthSel = document.getElementById('month');
+      monthSel.innerHTML = months.map(m => `<option value="${m}">${m}</option>`).join('');
+      CURRENT_MONTH = months[0] || null;
+
+      await Promise.all([renderHabits(), renderOverview(), renderDrill()]);
+    }
+
+    // Controls
+    document.getElementById('persona').addEventListener('change', async (e) => {
+      PERSONA = e.target.value;
+      _catMetaPromise = null;     // re-hydrate colors for the new persona
+      await init();
+    });
+    document.getElementById('month').addEventListener('change', async (e) => {
+      CURRENT_MONTH = e.target.value;
+      await Promise.all([renderOverview(), renderDrill()]);
+    });
+    wireToggle('habits-scope', 'scope', async (v) => { HABITS_SCOPE = v; await renderHabits(); });
+    wireToggle('dd-scope', 'dd', async (v) => { DD_SCOPE = v; await renderDrill(); });
+    wireToggle('pie-mode', 'mode', async (v) => {
+      ddPieMode = v;
+      await renderDrill();
+    });
+
+    init();
+  })();
+  </script>
+</body>
+</html>

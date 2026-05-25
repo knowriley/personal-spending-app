@@ -69,7 +69,10 @@
     <img src="/static/icons/icon-192.png" width="120" height="120" alt="120pt">
   </div>
   <p>Months available for <code>student</code>: <span id="months">loading…</span></p>
-  <p style="margin-top: 24px;">Dev playgrounds: <a href="/tests/ios-playground.html" style="color: #4338ca; text-decoration: underline;">iOS primitives</a></p>
+  <p style="margin-top: 24px;">Dev playgrounds:
+    <a href="/tests/ios-playground.html" style="color: #4338ca; text-decoration: underline;">iOS primitives</a>
+    · <a href="/tests/charts-playground.html" style="color: #4338ca; text-decoration: underline;">Charts</a>
+  </p>
   <p class="build">build {{ BUILD_HASH }} · {{ DEPLOY_URL }}</p>
   <script>
     fetch('/api/student/months.json')
