@@ -1272,9 +1272,7 @@ services:
   - type: web
     name: moneyhabits
     runtime: static
-    buildCommand: |
-      pip install -r requirements.txt
-      python build_static.py
+    buildCommand: pip install -r requirements.txt && python build_static.py
     staticPublishPath: ./dist
     pullRequestPreviewsEnabled: false
     envVars:
@@ -1282,18 +1280,27 @@ services:
         value: https://moneyhabits.onrender.com
     headers:
       - path: /sw.js
-        name: Cache-Control
-        value: no-cache, no-store, must-revalidate
+        headers:
+          - key: Cache-Control
+            value: no-cache, no-store, must-revalidate
       - path: /manifest.json
-        name: Content-Type
-        value: application/manifest+json
+        headers:
+          - key: Content-Type
+            value: application/manifest+json
       - path: /static/*
-        name: Cache-Control
-        value: public, max-age=31536000, immutable
+        headers:
+          - key: Cache-Control
+            value: public, max-age=31536000, immutable
       - path: /api/*
-        name: Cache-Control
-        value: public, max-age=3600, stale-while-revalidate=86400
+        headers:
+          - key: Cache-Control
+            value: public, max-age=3600, stale-while-revalidate=86400
 ```
+
+Two shape notes learned at M0:
+
+- **`buildCommand` is single-line with `&&` chaining**, not multi-line literal-block. The dashboard's Build Command field is single-line, so single-line YAML keeps the two surfaces in sync. Render's docs also show the single-line form.
+- **`headers` are nested**: each entry has `path` plus a `headers:` array of `{key, value}` pairs. The flat `name`/`value` shape an earlier draft showed is no longer accepted by current Render Blueprint spec.
 
 ### 10.2 Why these headers
 
