@@ -11,6 +11,22 @@ python app.py
 
 The app runs at `http://localhost:5001` in debug mode.
 
+## v2 in progress
+
+This repo is migrating from v1 (Flask + Plotly + live backend) to v2 (static PWA + Chart.js + pre-computed JSON).
+
+The v2 work happens on the `v2` branch. The full planning suite lives in `docs/`:
+
+- `PRD-v2-overview.md` — vision, success criteria, locked decisions (read first)
+- `PRD-v2-feature-spec.md` — per-surface behavior
+- `PRD-v2-mobile-design.md` — pixel-level design specs
+- `PRD-v2-pwa-shell.md` — manifest, icons, service worker
+- `PRD-v2-engineering.md` — build pipeline, Chart.js conversion, deploy
+- `PRD-v2-phasing.md` — milestone-by-milestone sequence (read second)
+- `PRD-v2-review.md` — record of cross-doc consistency fixes applied during planning
+
+Implementation follows the phasing doc strictly. Start with M0 (walking skeleton). Each milestone has explicit verification criteria — do not move to milestone N+1 until N's checklist passes.
+
 ## Architecture
 
 **Flask backend (`app.py`)** — thin routing layer. All business logic lives in `data_processor.py`.

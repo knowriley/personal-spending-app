@@ -14,3 +14,6 @@ venv/
 
 # Node (Tailwind build tooling)
 node_modules/
+
+# v2 build output
+/dist
