@@ -5,9 +5,7 @@ Generates the full /dist/api/{persona}/ tree by calling data_processor
 functions directly (engineering doc §3.2 decision). The Flask routes
 in app.py are not involved.
 
-M2 scope: student persona only.
-M3 widens PERSONAS_TO_BUILD to every entry in dp.DATASETS, plus
-generates /api/personas.json.
+M3 scope: every persona in dp.DATASETS, plus /api/personas.json.
 M5 replaces the placeholder index.html with the templated PWA shell.
 """
 
@@ -27,9 +25,6 @@ DIST = ROOT / "dist"
 # Timeframes that drive /api/summary's avg_start/avg_end. Mirrors the
 # v1 frontend's dateRangeFor() helper.
 TIMEFRAME_PRESETS = ["last-3-months", "last-6-months", "last-12-months", "ytd", "all-time"]
-
-# M2 builds only the default persona. M3 widens this.
-PERSONAS_TO_BUILD = ["student"]
 
 
 PLACEHOLDER_INDEX_HTML = """<!DOCTYPE html>
@@ -77,12 +72,17 @@ def main():
     api_root = DIST / "api"
     api_root.mkdir()
 
+    # personas.json — the frontend's source of truth for the dataset switcher.
+    # No `active` field; v2 tracks the active persona in localStorage.
+    write_json(api_root / "personas.json",
+               [{"key": k, "label": v["label"]} for k, v in dp.DATASETS.items()])
+
     # set_active_dataset() persists the choice to .active-dataset. Restore the
     # original at the end so running the build locally doesn't silently swap
     # the dev server's active persona.
     original_dataset = dp.get_active_dataset()
     try:
-        for persona_key in PERSONAS_TO_BUILD:
+        for persona_key in dp.DATASETS.keys():
             print(f"  → Pre-computing {persona_key}...")
             dp.set_active_dataset(persona_key)
             precompute_persona(persona_key, api_root)
@@ -281,7 +281,8 @@ def _json_default(o):
 
 
 def verify(api_root: Path) -> None:
-    for persona_key in PERSONAS_TO_BUILD:
+    assert (api_root / "personas.json").exists(), "Missing: personas.json"
+    for persona_key in dp.DATASETS.keys():
         out = api_root / persona_key
         singletons = [
             "categories.json", "months.json", "category-meta.json",
