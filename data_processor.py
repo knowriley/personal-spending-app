@@ -279,6 +279,29 @@ def get_transactions(
     return {"total": total, "page": page, "per_page": per_page, "rows": rows.to_dict(orient="records")}
 
 
+def transactions_all() -> list[dict]:
+    """Every spending transaction, unfiltered + unpaginated, newest-first.
+
+    Same row shape as get_transactions() but with `parent` added. Used by
+    v2's static build to ship the whole transaction list once per persona so
+    the v2 frontend can filter client-side. Orphan leaves get parent=None.
+    """
+    df = load_data().sort_values("date", ascending=False)
+
+    def _parent_or_none(p):
+        if isinstance(p, str) and p.strip():
+            return p.strip()
+        return None
+
+    rows = df[["date", "name", "category_norm", "parent_category", "amount", "account"]].copy()
+    rows["day_of_week"] = rows["date"].dt.strftime("%A")
+    rows["date"] = rows["date"].dt.strftime("%Y-%m-%d")
+    rows["amount"] = rows["amount"].round(2)
+    rows["parent_category"] = rows["parent_category"].map(_parent_or_none)
+    rows = rows.rename(columns={"category_norm": "category", "parent_category": "parent"})
+    return rows.to_dict(orient="records")
+
+
 def get_summary_stats(
     level: str = "all",
     category: Optional[str] = None,
@@ -420,6 +443,21 @@ def get_radial_data(
         result[str(int(year))] = months
 
     return result
+
+
+def radial(level: str = "all", category: Optional[str] = None) -> dict:
+    """v2 build-script wrapper over get_radial_data().
+
+    Maps the v2 (level, category) signature onto v1's (category, parent):
+      - level="all"    → no scope filter
+      - level="parent" → filter to all leaves under `category` (parent group)
+      - level="leaf"   → filter to that single leaf
+    """
+    if level == "parent":
+        return get_radial_data(parent=category)
+    if level == "leaf":
+        return get_radial_data(category=category)
+    return get_radial_data()
 
 
 def get_category_detail(category: str, year_month: str, level: str = "leaf") -> dict:
