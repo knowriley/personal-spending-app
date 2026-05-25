@@ -2,9 +2,7 @@ services:
   - type: web
     name: moneyhabits
     runtime: static
-    buildCommand: |
-      pip install -r requirements.txt
-      python build_static.py
+    buildCommand: pip install -r requirements.txt && python build_static.py
     staticPublishPath: ./dist
     pullRequestPreviewsEnabled: false
     envVars:
@@ -12,14 +10,18 @@ services:
         value: https://moneyhabits.onrender.com
     headers:
       - path: /sw.js
-        name: Cache-Control
-        value: no-cache, no-store, must-revalidate
+        headers:
+          - key: Cache-Control
+            value: no-cache, no-store, must-revalidate
       - path: /manifest.json
-        name: Content-Type
-        value: application/manifest+json
+        headers:
+          - key: Content-Type
+            value: application/manifest+json
       - path: /static/*
-        name: Cache-Control
-        value: public, max-age=31536000, immutable
+        headers:
+          - key: Cache-Control
+            value: public, max-age=31536000, immutable
       - path: /api/*
-        name: Cache-Control
-        value: public, max-age=3600, stale-while-revalidate=86400
+        headers:
+          - key: Cache-Control
+            value: public, max-age=3600, stale-while-revalidate=86400
