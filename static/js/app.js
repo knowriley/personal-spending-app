@@ -1,43 +1,6 @@
-// ── Shared Plotly theme ───────────────────────────────────────────────────────
-// Lazily resolved so the CSS custom-property tokens (loaded from style.css) are
-// available by the time the first chart renders. All Plotly layouts spread
-// `...plotlyLayout()` rather than referencing a top-level constant so the
-// theme stays a single source of truth for colors / fonts / margins.
-let _plotlyLayout = null;
-function plotlyLayout() {
-  if (_plotlyLayout) return _plotlyLayout;
-  _plotlyLayout = {
-    paper_bgcolor: token('color-white'),
-    plot_bgcolor:  token('color-white'),
-    font: { family: 'Inter, ui-sans-serif, system-ui, sans-serif', color: token('color-gray-700') },
-    margin: { t: 10, r: 10, b: 40, l: 10 },
-    // Disable drag-to-zoom / pan / select interactions across every chart.
-    // Hover and click handlers still fire — only the data-range gestures are off.
-    dragmode: false,
-    colorway: [
-      token('color-plot-0'), token('color-plot-1'), token('color-plot-2'),
-      token('color-plot-3'), token('color-plot-4'), token('color-plot-5'),
-      token('color-plot-6'), token('color-plot-7'), token('color-plot-8'),
-      token('color-plot-9'),
-    ],
-  };
-  return _plotlyLayout;
-}
-
-// scrollZoom + doubleClick off complete the lockdown on zoom interactions;
-// dragmode: false (in plotlyLayout above) kills drag-to-zoom. Hover, click,
-// and legend-click handlers still fire because they're not gesture-based.
-// responsive: true stays on so charts re-fit when their containers resize.
-const PLOTLY_CONFIG = {
-  displayModeBar: false,
-  responsive: true,
-  scrollZoom: false,
-  doubleClick: false,
-};
-
 // Set role + aria-label on a chart container so screen readers announce the
 // visualization with a meaningful summary instead of an empty <div>. Call
-// after each Plotly render so the label reflects the current state.
+// after each chart render so the label reflects the current state.
 function setChartA11y(elId, label) {
   const el = document.getElementById(elId);
   if (!el) return;
@@ -49,10 +12,11 @@ function fmt(n) {
   return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
-// ── Custom DOM tooltip (shared by every Plotly chart) ────────────────────────
-// We disable Plotly's native hoverlabels (`hoverinfo: 'none'` per trace) and
-// drive a single #ct-tip element via plotly_hover / plotly_unhover events.
-// Per-chart `tip*HTML` builders produce the rich card content.
+// ── Custom DOM tooltip ────────────────────────────────────────────────────
+// Drives a single #ct-tip element from mouse events. Now used only by the
+// hand-rolled SVG radial chart (renderHabitsRadial → showCustomTooltip); the
+// Chart.js charts use native tooltips (#cjs-tip). The other tip*HTML builders
+// are kept but dormant. Per-chart `tip*HTML` builders produce the card content.
 const TIP = { el: null, padding: 12 };
 
 function showCustomTooltip(html, mouseEvent) {
@@ -102,9 +66,9 @@ function tipCatBadge(name) {
 
 // ── Chart.js shared infrastructure ───────────────────────────────────────────
 // Every non-radial chart renders via Chart.js (M8). These helpers mirror the
-// Plotly theme above: global defaults set once at boot, a per-render layout
-// fragment, a canvas-lifecycle registry, and a native-tooltip styler that
-// reuses tipCard() so Chart.js tooltips look identical to the old Plotly ones.
+// Global defaults set once at boot, a per-render layout fragment, a
+// canvas-lifecycle registry, and a native-tooltip styler that reuses tipCard()
+// so Chart.js tooltips match the shared card look.
 
 let _chartDefaultsInited = false;
 function initChartDefaults() {
@@ -153,7 +117,7 @@ function chartLayout() {
   };
 }
 
-// Chart.js needs a <canvas>; the old Plotly containers were <div>s. Find-or-create
+// Chart.js needs a <canvas>; the chart containers are <div>s. Find-or-create
 // a single canvas child of the container and return it (Chart accepts the element).
 function getChartCanvas(containerId) {
   const el = document.getElementById(containerId);
@@ -1730,9 +1694,9 @@ function syncChartTypeUI() {
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   });
 
-  // Toggle the chart container visibility — Plotly is happy drawing into a
-  // previously-hidden div as long as it has dimensions when newPlot runs, so
-  // each renderer flips its own slot to visible before Plotly.newPlot.
+  // Toggle the chart container visibility — each renderer needs its slot to
+  // have dimensions when it draws, so flip the visible slot before rendering.
+  // (Chart.js bar in #chart-monthly, SVG radial in #chart-radial.)
   document.getElementById('chart-monthly')?.classList.toggle('hidden',  isRadial);
   document.getElementById('chart-radial') ?.classList.toggle('hidden', !isRadial);
 }
@@ -2065,8 +2029,8 @@ async function renderHabitsRadial() {
     titleEl.textContent = `${scopeLabel} — Year-over-Year`;
   }
 
-  // Make sure the radial slot is the visible one before Plotly.newPlot — it
-  // needs definite dimensions to lay out polar ticks.
+  // Make sure the radial slot is the visible one — the SVG sizes to its
+  // container, so it needs definite dimensions before render.
   document.getElementById('chart-monthly')?.classList.add('hidden');
   document.getElementById('chart-radial') ?.classList.remove('hidden');
 
@@ -2095,7 +2059,7 @@ async function renderHabitsRadial() {
   const radialEl = document.getElementById('chart-radial');
   if (!radialEl) return;
   if (!visibleYears.length) {
-    Plotly.purge('chart-radial');
+    MoneyHabitsRadial.destroy(radialEl);
     const scopeLabel = lensLevel === 'all' ? 'all spending' : (lensCategory || 'this scope');
     radialEl.innerHTML = `
       <div class="h-full w-full flex items-center justify-center text-sm text-neutral-500">
@@ -2105,130 +2069,56 @@ async function renderHabitsRadial() {
     return;
   }
 
-  const theta = [...MONTH_LABELS, 'Jan'];   // close the loop visually
-
-  // Fill traces (under) — flat, no markers, low alpha.
-  const fillTraces = visibleYears.map(year => {
-    const color = radialColorFor(year, visibleYears);
-    const r = [...(data[year] || []), (data[year] || [])[0] || 0];
-    return {
-      type:      'scatterpolar',
-      name:      year,
-      r,
-      theta,
-      fill:      'toself',
-      fillcolor: color + '22',
-      mode:      'none',
-      showlegend: false,
-      hoverinfo: 'skip',
-    };
-  });
-
-  // Line + marker traces on top (markers are the click targets).
-  const lineTraces = visibleYears.map(year => {
-    const color = radialColorFor(year, visibleYears);
-    const r = [...(data[year] || []), (data[year] || [])[0] || 0];
-    return {
-      type:      'scatterpolar',
-      name:      year,
-      r,
-      theta,
-      fill:      'none',
-      mode:      'lines+markers',
-      line:      { color, width: 2 },
-      marker:    { color, size: 5 },
-      hoverinfo: 'none',
-    };
-  });
-
-  Plotly.newPlot('chart-radial', [...fillTraces, ...lineTraces], {
-    ...plotlyLayout(),
-    polar: {
-      bgcolor: token('color-white'),
-      angularaxis: {
-        tickfont:  { size: 12, family: 'Inter, ui-sans-serif, system-ui, sans-serif' },
-        direction: 'clockwise',
-        rotation:  90,
-        gridcolor: token('color-gray-200'),
-        linecolor: token('color-gray-200'),
-      },
-      radialaxis: {
-        showticklabels: false,
-        ticks:     '',
-        gridcolor: token('color-gray-100'),
-        linecolor: token('color-gray-200'),
-        angle:     90,
-      },
-    },
-    legend: {
-      orientation:     'h',
-      y:               -0.08,
-      x:               0.5,
-      xanchor:         'center',
-      font:            { size: 12 },
-      itemclick:       false,
-      itemdoubleclick: false,
-    },
-    margin: { t: 20, r: 40, b: 60, l: 40 },
-  }, PLOTLY_CONFIG);
-
-  const scopeLabel = lensLevel === 'all' ? 'All spending' : (lensCategory || 'spending');
-  setChartA11y('chart-radial',
-    `Year-over-year monthly spending for ${scopeLabel}, ${visibleYears.length} year${visibleYears.length !== 1 ? 's' : ''} shown`);
-
   // Drop the click-pin if the highlighted year is no longer visible (e.g.
   // user unchecked it from the year picker).
   if (radialHighlightYear && !visibleYears.includes(radialHighlightYear)) {
     radialHighlightYear = null;
   }
 
-  // Click a node (marker on a line trace) → setLensMonth + scroll AND toggle
-  // the year-highlight pin. Re-clicking the same year's marker clears the pin.
-  radialEl.on('plotly_click', evt => {
-    const pt = evt.points?.[0];
-    if (!pt) return;
-    if (pt.curveNumber < visibleYears.length) return;   // fill trace
-    const year      = pt.data?.name;
-    const monthName = pt.theta;
-    const monthNum  = MONTH_NUM[monthName];
-    if (!year || !monthNum) return;
-    const monthKey = `${year}-${String(monthNum).padStart(2, '0')}`;
-    radialHighlightYear = (radialHighlightYear === year) ? null : year;
-    applyRadialHighlight();
-    setLensMonth(monthKey);
-    scrollToDrilldown();
+  const scopeLabel = lensLevel === 'all' ? 'All spending' : (lensCategory || 'spending');
+
+  // Hand off to the SVG module. app.js still owns state (pin, focused month)
+  // and the tooltip — radial.js just renders + emits hover/click.
+  MoneyHabitsRadial.render(radialEl, {
+    data,
+    years: visibleYears,                       // most-recent first → palette index 0
+    colorForYear: (year) => radialColorFor(year, visibleYears),
+    ariaLabel: `Year-over-year monthly spending for ${scopeLabel}, ${visibleYears.length} year${visibleYears.length !== 1 ? 's' : ''} shown`,
+    // Hover → custom tooltip + spotlight the hovered year (dim the rest).
+    onMonthHover: ({ year, monthName, value, event }) => {
+      showCustomTooltip(tipRadialHTML(year, monthName, value), event);
+      applyRadialHighlight(year);
+    },
+    onMonthLeave: () => { hideCustomTooltip(); applyRadialHighlight(); },
+    // Click a node → setLensMonth + scroll AND toggle the year-highlight pin.
+    onMonthClick: ({ year, month }) => {
+      const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+      radialHighlightYear = (radialHighlightYear === year) ? null : year;
+      applyRadialHighlight();
+      setLensMonth(monthKey);
+      scrollToDrilldown();
+    },
+    // Legend swatch → pin toggle (no month chosen, so no drill-down nav).
+    onYearClick: (year) => {
+      radialHighlightYear = (radialHighlightYear === year) ? null : year;
+      applyRadialHighlight();
+    },
   });
 
-  // Hover → custom tooltip + dim the other rings to spotlight the hovered year.
-  radialEl.on('plotly_hover', evt => {
-    showCustomTooltip(tipRadialHTML(evt), evt.event);
-    const pt = evt.points?.[0];
-    if (pt?.data?.name) applyRadialHighlight(pt.data.name);
-  });
-  radialEl.on('plotly_unhover', () => {
-    hideCustomTooltip();
-    applyRadialHighlight();   // falls back to the pinned year (if any)
-  });
+  setChartA11y('chart-radial',
+    `Year-over-year monthly spending for ${scopeLabel}, ${visibleYears.length} year${visibleYears.length !== 1 ? 's' : ''} shown`);
 
   // Initial paint: respect any pre-existing pin.
   applyRadialHighlight();
 }
 
-// Dim non-highlighted year rings (both the fill trace and the line trace per
-// year share the same `name` = year). `hoverYear` overrides the pinned state
-// for the duration of a hover; without it, falls back to radialHighlightYear.
-// When neither is set, all rings render at full opacity.
+// Dim non-highlighted year rings. `hoverYear` overrides the pinned state for
+// the duration of a hover; without it, falls back to radialHighlightYear. When
+// neither is set, all rings render at full opacity. Delegates to radial.js.
 function applyRadialHighlight(hoverYear) {
   const radialEl = document.getElementById('chart-radial');
-  if (!radialEl || !radialEl.data || !radialEl.data.length) return;
-  const target = hoverYear || radialHighlightYear;
-  const opacities = radialEl.data.map(t => {
-    if (!target) return 1;
-    return t.name === target ? 1 : 0.18;
-  });
-  Plotly.restyle('chart-radial',
-    { opacity: opacities },
-    Array.from({ length: radialEl.data.length }, (_, i) => i));
+  if (!radialEl) return;
+  MoneyHabitsRadial.setHighlight(radialEl, hoverYear || radialHighlightYear || null);
 }
 
 
@@ -2241,9 +2131,9 @@ function formatMonthLabel(ym) {
 
 const SHORT_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-// Tick label for an x-axis period. Plotly's `tickformat` is ignored when
-// xaxis.type === 'category' (the case for monthly bar charts), so we compute
-// explicit ticktext via this helper and pass it via xaxis.tickvals/ticktext.
+// Tick label for an x-axis period. The bar chart's x-axis is categorical, so
+// we compute explicit display labels via this helper and emit them from the
+// scale's ticks.callback.
 //
 // Rules (driven by granularity + period count):
 //   month, ≤12 ticks  → "MMM"; first tick + Jan ticks show "MMM 'YY"
@@ -3237,13 +3127,11 @@ function cjsTipBubble(ctx) {
 }
 
 // Radial tooltip — year + month name + dollar value.
-function tipRadialHTML(evt) {
-  const pt = evt.points?.[0];
-  if (!pt) return '';
+function tipRadialHTML(year, monthName, value) {
   return tipCard({
-    title: `${pt.data?.name || ''}`,
-    meta: pt.theta || '',
-    value: fmt(pt.r || 0),
+    title: `${year || ''}`,
+    meta: monthName || '',
+    value: fmt(value || 0),
   });
 }
 
@@ -3460,10 +3348,9 @@ async function loadTransactions() {
   document.getElementById('txn-next').disabled = txnPage >= totalPages;
 }
 
-// ── Radial chart constants ───────────────────────────────────────────────────
-// Used by renderHabitsRadial (above). MONTH_LABELS doubles as theta tick
-// labels for the polar chart and as the lookup table for click-to-month
-// resolution via MONTH_NUM (defined later).
+// ── Month / day label constants ──────────────────────────────────────────────
+// MONTH_LABELS is the shared month-abbreviation table (drill-down cumulative +
+// bubble + daily-strip axis labels). radial.js carries its own copy.
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DOW_LABELS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
@@ -3472,7 +3359,6 @@ const DOW_LABELS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday
 // chart no longer opens this panel — clicks on radial nodes flow through
 // setLensMonth + the in-page drill-down instead. openTxnPanel is unreferenced
 // today; the close-button listener still runs (no-op when the panel is hidden).
-const MONTH_NUM = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
 
 let _txnPanelOpener = null;
 

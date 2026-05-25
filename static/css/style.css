@@ -1,7 +1,7 @@
 /* ── Design tokens (mirrors tailwind.config.js) ──────────────────────────────
    Source of truth: tailwind.config.js (accent palette) + Tailwind defaults
-   (gray palette). Mirrored here as CSS custom properties so JS code (Plotly
-   trace colors, in particular) can read them via getComputedStyle without
+   (gray palette). Mirrored here as CSS custom properties so JS code (chart
+   colors, in particular) can read them via getComputedStyle without
    hardcoding hex values inline. Update both places in lockstep. */
 :root {
   --color-white:      #ffffff;
@@ -39,21 +39,6 @@
   --color-gray-800:   #262626;
   --color-gray-900:   #171717;
 
-  /* Plotly colorway — generic series colors used by the shared layout's
-     `colorway` (orderless multi-trace charts that don't carry a specific
-     category mapping). Indigo ramp first (the brand accent), then a mixed
-     palette for additional series. */
-  --color-plot-0:     #6366f1;  /* indigo-500 */
-  --color-plot-1:     #818cf8;  /* indigo-400 */
-  --color-plot-2:     #a5b4fc;  /* indigo-300 */
-  --color-plot-3:     #c7d2fe;  /* indigo-200 */
-  --color-plot-4:     #e0e7ff;  /* indigo-100 */
-  --color-plot-5:     #f97316;  /* orange-500 */
-  --color-plot-6:     #fb923c;  /* orange-400 */
-  --color-plot-7:     #fca5a1;  /* red-300 */
-  --color-plot-8:     #34d399;  /* emerald-400 */
-  --color-plot-9:     #facc15;  /* yellow-400 */
-
   /* Radial chart palette — six year-over-year rings on the radial visualization. */
   --color-radial-0:   #3b82f6;  /* blue-500 */
   --color-radial-1:   #f97316;  /* orange-500 */
@@ -67,7 +52,7 @@
      Each slug exposes three shades:
        -bg  → chip background (Tailwind 100)
        -fg  → chip text       (Tailwind 700)
-       -mid → Plotly traces, dots (Tailwind 500)
+       -mid → chart series, dots (Tailwind 500)
      Children of a parent group inherit their parent's slug — see
      PARENT_SLUG / ORPHAN_SLUG in static/js/app.js. */
 
@@ -193,31 +178,6 @@
   min-width: 33vw;
 }
 
-/* ── Plotly overrides ────────────────────────────────────────────────────────*/
-.js-plotly-plot .plotly,
-.js-plotly-plot .plotly .main-svg {
-  border-radius: 0;
-}
-
-.js-plotly-plot .plotly .nsewdrag {
-  cursor: default;
-}
-
-/* Legend is display-only — no pointer */
-.js-plotly-plot .plotly .legend,
-.js-plotly-plot .plotly .legend .bg,
-.js-plotly-plot .plotly .legend .scrollbox,
-.js-plotly-plot .plotly .legend .legendtoggle,
-.js-plotly-plot .plotly .legend .legendtext {
-  cursor: default !important;
-  pointer-events: none;
-}
-
-/* Radial fill traces are non-interactive — suppress pointer on their paths */
-.js-plotly-plot .plotly .fills path {
-  cursor: default;
-  pointer-events: none;
-}
 
 .modebar-container {
   display: none !important;
@@ -265,9 +225,10 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   text-decoration: none;
 }
 
-/* Shared custom tooltip used by every Plotly chart in app.js. Per-chart
-   builders (tip*HTML) inject .ct-tip-style content; data-accent + --ct-accent
-   give an optional colored left border bound to a category's data-viz hue. */
+/* Shared tooltip card styling. Used by the SVG radial chart's #ct-tip and the
+   Chart.js native tooltips' #cjs-tip (both render the tipCard() markup in
+   app.js). data-accent + --ct-accent give an optional colored left border
+   bound to a category's data-viz hue. */
 .ct-tip {
   background: #ffffff;
   border: 1px solid #e5e7eb;            /* gray-200 */
@@ -362,11 +323,6 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 #section-overview .grid > div:has(.info-tt:focus-within) {
   z-index: 50;
 }
-
-/* Make Plotly legend pills feel clickable. The Habits monthly chart wires
-   plotly_legendclick to drill the lens scope, so a pointer cursor signals
-   the affordance. */
-#chart-monthly .legendtoggle { cursor: pointer; }
 
 /* Two-layer arrow: the outer ::before draws the border-color tip, the inner
    ::after draws the white fill 1px above it so the bubble's 1px border
