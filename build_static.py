@@ -65,6 +65,12 @@ def main():
     # 2. Copy static assets (CSS, JS, generated icons + splash) into /dist.
     shutil.copytree(STATIC_SRC, DIST / "static")
 
+    # 2b. Copy /tests/ → /dist/tests/ when present (M7+ playground pages).
+    #     Removed in M14 cleanup before ship.
+    tests_src = ROOT / "tests"
+    if tests_src.exists():
+        shutil.copytree(tests_src, DIST / "tests")
+
     # 3. Render PWA manifest + index.html with substituted build identity.
     render_manifest_json()
     render_index_html()

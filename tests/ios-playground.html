@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>iOS Playground — MoneyHabits</title>
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      font: 16px -apple-system, system-ui, sans-serif;
+      color: #1c1c1e;
+      background: #ffffff;
+      overflow: hidden;
+    }
+    #scroll-container {
+      height: 100dvh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .sticky-bar {
+      position: sticky; top: 0; z-index: 40;
+      background: #ffffff;
+      border-bottom: 1px solid #e5e5ea;
+      padding: env(safe-area-inset-top) 16px 0;
+      height: calc(44px + env(safe-area-inset-top));
+      display: flex; align-items: center; justify-content: center;
+      font: 600 17px -apple-system, system-ui, sans-serif;
+    }
+    .large-title-block {
+      padding: 16px 16px 8px;
+    }
+    .eyebrow {
+      font: 500 14px -apple-system, system-ui, sans-serif;
+      color: #636366;
+      margin-bottom: 4px;
+    }
+    .large-title {
+      font: 700 34px -apple-system, system-ui, sans-serif;
+      letter-spacing: -0.02em;
+      color: #1c1c1e;
+      margin: 0;
+      transform-origin: left top;
+    }
+    .divider {
+      height: 1px; background: #f2f2f7;
+      margin: 8px 0;
+    }
+    .section {
+      padding: 16px;
+    }
+    .section h2 {
+      font: 600 13px -apple-system, system-ui, sans-serif;
+      color: #8e8e93;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin: 0 0 8px;
+    }
+    .btn {
+      display: inline-block; width: 100%;
+      background: #f2f2f7;
+      color: #1c1c1e;
+      font: 500 16px -apple-system, system-ui, sans-serif;
+      border: 0;
+      padding: 14px 16px;
+      border-radius: 12px;
+      text-align: left;
+      margin-bottom: 8px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { background: #e5e5ea; }
+    .btn-primary { background: #4338ca; color: #ffffff; }
+    .btn-primary:active { background: #3730a3; }
+
+    /* Layout for the right-flyout-compresses-parent test (desktop) */
+    .split-test {
+      display: flex; gap: 0;
+      border: 1px solid #e5e5ea;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .pane-trends {
+      flex: 1 1 auto; min-width: 0;
+      padding: 16px;
+      background: #fafafa;
+      width: 100%;
+    }
+    .pane-trends h3 { margin: 0 0 8px; font: 600 18px -apple-system, system-ui, sans-serif; }
+
+    /* Filler so the large-title scroll behavior has something to scroll past */
+    .filler {
+      padding: 16px;
+    }
+    .filler-row {
+      display: flex; justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid #f2f2f7;
+      font: 400 15px -apple-system, system-ui, sans-serif;
+    }
+    .filler-row:last-child { border-bottom: 0; }
+  </style>
+</head>
+<body>
+
+  <div id="scroll-container">
+
+    <!-- Sticky bar: becomes visible on scroll, faded by initLargeTitleScroll -->
+    <div class="sticky-bar" id="sticky-bar">Playground</div>
+
+    <!-- Large title block: fades out on scroll -->
+    <div class="large-title-block" id="large-title-block">
+      <div class="eyebrow">M7 verification</div>
+      <h1 class="large-title">iOS Playground</h1>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section">
+      <h2>Bottom sheet</h2>
+      <button class="btn btn-primary" onclick="MoneyHabitsIOS.openBottomSheet({
+        title: 'Pick a month',
+        content: monthPickerContent(),
+      })">Open month-picker sheet</button>
+
+      <button class="btn" onclick="MoneyHabitsIOS.openBottomSheet({
+        content: '<p>Short content. Tap the backdrop or swipe me down to dismiss.</p>',
+        showHandle: true,
+      })">Open compact sheet (no title)</button>
+
+      <button class="btn" onclick="MoneyHabitsIOS.openBottomSheet({
+        title: 'Long content',
+        content: longSheetContent(),
+      })">Open sheet with scrollable content</button>
+    </div>
+
+    <div class="section">
+      <h2>Right flyout</h2>
+      <p style="color: #636366; font-size: 14px; margin-top: 0;">
+        On mobile (&lt;768px) the flyout takes the full screen. On desktop, the Trends pane below compresses to 50% as the flyout slides in.
+      </p>
+
+      <div class="split-test">
+        <div class="pane-trends" id="trends-pane">
+          <h3>Trends pane</h3>
+          <p>Imagine a chart here. Open the flyout — on desktop this pane shrinks to 50%; on mobile the flyout overlays it.</p>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" style="margin-top: 12px;" onclick="MoneyHabitsIOS.openRightFlyout({
+        title: 'April 2026 Spending',
+        content: drillDownContent(),
+        compressTarget: document.getElementById('trends-pane'),
+      })">Open drill-down flyout</button>
+    </div>
+
+    <div class="section">
+      <h2>Large-title scroll (you're testing it now)</h2>
+      <p style="color: #636366; font-size: 14px;">
+        Scroll up and down — the &ldquo;iOS Playground&rdquo; large title above fades, scales, and translates as you scroll past 60pt, while the &ldquo;Playground&rdquo; sticky bar fades in. On rubber-band-overscroll at top, both should stay clamped.
+      </p>
+    </div>
+
+    <div class="section">
+      <h2>Filler (scroll past me to exercise the large-title behavior)</h2>
+      <div class="filler" id="filler"></div>
+    </div>
+
+    <div style="height: 200px;"></div>
+
+  </div>
+
+  <script src="/static/js/ios.js"></script>
+  <script>
+    // Fill the page with rows so there's something to scroll past
+    (function () {
+      const filler = document.getElementById('filler');
+      for (let i = 1; i <= 60; i++) {
+        const row = document.createElement('div');
+        row.className = 'filler-row';
+        row.innerHTML = `<span>Row ${i}</span><span>$${(Math.random() * 200).toFixed(2)}</span>`;
+        filler.appendChild(row);
+      }
+    })();
+
+    // Wire the large-title scroll
+    MoneyHabitsIOS.initLargeTitleScroll(
+      document.getElementById('scroll-container'),
+      {
+        largeTitle: document.getElementById('large-title-block'),
+        stickyBar: document.getElementById('sticky-bar'),
+      },
+    );
+
+    function monthPickerContent() {
+      const months = ['May 2026','Apr 2026','Mar 2026','Feb 2026','Jan 2026','Dec 2025','Nov 2025','Oct 2025','Sep 2025','Aug 2025','Jul 2025','Jun 2025','May 2025'];
+      const list = months.map(m =>
+        `<button class="btn" onclick="MoneyHabitsIOS.closeBottomSheet()" style="margin-bottom: 4px;">${m}</button>`
+      ).join('');
+      return `<p style="color: #636366; font-size: 14px; margin: 0 0 12px;">Tap a row to dismiss.</p>${list}`;
+    }
+
+    function longSheetContent() {
+      const items = [];
+      for (let i = 1; i <= 40; i++) {
+        items.push(`<div style="padding: 12px 0; border-bottom: 1px solid #f2f2f7;">Item ${i} — proves inner scroll works in the sheet</div>`);
+      }
+      return items.join('');
+    }
+
+    function drillDownContent() {
+      const items = [];
+      for (let i = 1; i <= 30; i++) {
+        items.push(`<div style="display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f2f2f7;"><span>Transaction ${i}</span><span>$${(Math.random() * 100).toFixed(2)}</span></div>`);
+      }
+      return `
+        <h2 style="font: 700 28px -apple-system, system-ui, sans-serif; margin: 8px 0 4px;">$${(Math.random() * 2000).toFixed(2)}</h2>
+        <p style="color: #636366; margin: 0 0 16px;">total spent</p>
+        ${items.join('')}
+      `;
+    }
+  </script>
+</body>
+</html>
