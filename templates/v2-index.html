@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>MoneyHabits</title>
+  <meta name="description" content="A personal finance dashboard for tracking spending habits.">
+
+  <meta name="theme-color" content="#ffffff">
+
+  <link rel="manifest" href="/manifest.json?v={{ BUILD_HASH }}">
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="MoneyHabits">
+  <meta property="og:description" content="A personal finance dashboard for tracking spending habits.">
+  <meta property="og:image" content="{{ DEPLOY_URL }}/static/icons/icon-512.png?v={{ BUILD_HASH }}">
+  <meta property="og:url" content="{{ DEPLOY_URL }}/">
+
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="MoneyHabits">
+  <meta name="format-detection" content="telephone=no">
+
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png?v={{ BUILD_HASH }}">
+  <link rel="apple-touch-icon" sizes="167x167" href="/static/icons/icon-167.png?v={{ BUILD_HASH }}">
+  <link rel="apple-touch-icon" sizes="152x152" href="/static/icons/icon-152.png?v={{ BUILD_HASH }}">
+  <link rel="apple-touch-icon" sizes="120x120" href="/static/icons/icon-120.png?v={{ BUILD_HASH }}">
+
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png?v={{ BUILD_HASH }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16.png?v={{ BUILD_HASH }}">
+  <link rel="shortcut icon" href="/static/icons/favicon.ico">
+
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-1290x2796.png?v={{ BUILD_HASH }}"
+    media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-1206x2622.png?v={{ BUILD_HASH }}"
+    media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-1170x2532.png?v={{ BUILD_HASH }}"
+    media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-1080x2340.png?v={{ BUILD_HASH }}"
+    media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-750x1334.png?v={{ BUILD_HASH }}"
+    media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-2048x2732.png?v={{ BUILD_HASH }}"
+    media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-1668x2388.png?v={{ BUILD_HASH }}"
+    media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-1620x2160.png?v={{ BUILD_HASH }}"
+    media="(device-width: 810px) and (device-height: 1080px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+  <link rel="apple-touch-startup-image" href="/static/splash/splash-1488x2266.png?v={{ BUILD_HASH }}"
+    media="(device-width: 744px) and (device-height: 1133px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)">
+
+  <style>
+    body { font: 16px -apple-system, system-ui, sans-serif; margin: 0; padding: 2rem; color: #1c1c1e; max-width: 36rem; padding-top: max(2rem, env(safe-area-inset-top)); }
+    h1 { font-weight: 600; margin-top: 0; }
+    code { background: #f2f2f7; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    #months { color: #636366; }
+    .build { color: #8e8e93; font-size: 13px; margin-top: 24px; }
+    .icon-preview { display: flex; gap: 12px; align-items: end; margin: 16px 0 24px; }
+    .icon-preview img { border-radius: 22%; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  </style>
+</head>
+<body>
+  <h1>MoneyHabits</h1>
+  <p>v2 build — M5 (PWA manifest + meta).</p>
+  <p>Add this to your home screen via Safari → Share → Add to Home Screen, and it'll launch standalone.</p>
+  <div class="icon-preview">
+    <img src="/static/icons/icon-120.png" width="60" height="60" alt="60pt">
+    <img src="/static/icons/icon-180.png" width="90" height="90" alt="90pt">
+    <img src="/static/icons/icon-192.png" width="120" height="120" alt="120pt">
+  </div>
+  <p>Months available for <code>student</code>: <span id="months">loading…</span></p>
+  <p class="build">build {{ BUILD_HASH }} · {{ DEPLOY_URL }}</p>
+  <script>
+    fetch('/api/student/months.json')
+      .then(r => r.json())
+      .then(months => {
+        const el = document.getElementById('months');
+        el.textContent = months.length
+          ? `${months.length} months, ${months[0]} → ${months[months.length - 1]}`
+          : '(none)';
+      })
+      .catch(err => { document.getElementById('months').textContent = 'fetch failed: ' + err.message; });
+  </script>
+</body>
+</html>

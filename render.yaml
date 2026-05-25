@@ -7,7 +7,7 @@ services:
     pullRequestPreviewsEnabled: false
     envVars:
       - key: DEPLOY_URL
-        value: https://moneyhabits.onrender.com
+        value: https://personal-spending-app-2.onrender.com
     headers:
       - path: /sw.js
         headers:

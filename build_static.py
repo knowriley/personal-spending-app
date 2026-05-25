@@ -5,12 +5,13 @@ Generates the full /dist/api/{persona}/ tree by calling data_processor
 functions directly (engineering doc §3.2 decision). The Flask routes
 in app.py are not involved.
 
-M4 scope: + asset pipeline (build_assets.py → PNGs + favicon.ico under
-static/icons/ and static/splash/) + copy static/ → dist/static/.
-M5 replaces the placeholder index.html with the templated PWA shell.
+M5 scope: + PWA manifest (manifest.template.json → manifest.json with
+build-hash substitution) + templated index.html (v2-index.html → dist/
+index.html via Jinja with BUILD_HASH + DEPLOY_URL substitution).
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -25,58 +26,30 @@ import data_processor as dp
 ROOT = Path(__file__).parent
 DIST = ROOT / "dist"
 STATIC_SRC = ROOT / "static"
+TEMPLATES_SRC = ROOT / "templates"
+
+# Build identity — short git SHA when available, "dev" otherwise.
+# Used as a cache-bust query string on every asset URL and as the cache
+# version suffix in the service worker (M6+).
+BUILD_HASH = (
+    subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    if (ROOT / ".git").exists()
+    else "dev"
+)
+
+# Absolute origin URL. Required for og:image and og:url (relative URLs
+# don't resolve in iMessage/Slack link-preview contexts). Render's env var
+# wins; the default matches the current production hostname.
+DEPLOY_URL = os.environ.get("DEPLOY_URL", "https://personal-spending-app-2.onrender.com")
 
 # Timeframes that drive /api/summary's avg_start/avg_end. Mirrors the
 # v1 frontend's dateRangeFor() helper.
 TIMEFRAME_PRESETS = ["last-3-months", "last-6-months", "last-12-months", "ytd", "all-time"]
 
 
-PLACEHOLDER_INDEX_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MoneyHabits</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
-  <style>
-    body { font: 16px -apple-system, system-ui, sans-serif; margin: 2rem; color: #1c1c1e; max-width: 32rem; }
-    h1 { font-weight: 600; }
-    code { background: #f2f2f7; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
-    #months { color: #636366; }
-    .icon-preview { display: flex; gap: 12px; align-items: end; margin: 16px 0 24px; }
-    .icon-preview img { border-radius: 22%; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-  </style>
-</head>
-<body>
-  <h1>MoneyHabits</h1>
-  <p>v2 build — M4 (asset pipeline + JSON tree).</p>
-  <p>The real frontend lands at M8+. Until then, this page confirms the JSON tree is reachable and the icon assets render.</p>
-  <div class="icon-preview">
-    <img src="/static/icons/icon-120.png" width="60" height="60" alt="60pt">
-    <img src="/static/icons/icon-180.png" width="90" height="90" alt="90pt">
-    <img src="/static/icons/icon-192.png" width="120" height="120" alt="120pt">
-  </div>
-  <p>Months available for <code>student</code>: <span id="months">loading...</span></p>
-  <script>
-    fetch('/api/student/months.json')
-      .then(r => r.json())
-      .then(months => {
-        const el = document.getElementById('months');
-        el.textContent = months.length
-          ? `${months.length} months, ${months[0]} → ${months[months.length - 1]}`
-          : '(none)';
-      })
-      .catch(err => { document.getElementById('months').textContent = 'fetch failed: ' + err.message; });
-  </script>
-</body>
-</html>
-"""
-
-
 def main():
     start = time.time()
+    print(f"Building MoneyHabits v2 — BUILD_HASH={BUILD_HASH}, DEPLOY_URL={DEPLOY_URL}")
 
     if DIST.exists():
         shutil.rmtree(DIST)
@@ -90,7 +63,10 @@ def main():
     # 2. Copy static assets (CSS, JS, generated icons + splash) into /dist.
     shutil.copytree(STATIC_SRC, DIST / "static")
 
-    (DIST / "index.html").write_text(PLACEHOLDER_INDEX_HTML)
+    # 3. Render PWA manifest + index.html with substituted build identity.
+    render_manifest_json()
+    render_index_html()
+
     api_root = DIST / "api"
     api_root.mkdir()
 
@@ -215,6 +191,35 @@ def precompute_persona(persona_key: str, api_root: Path) -> None:
         slug = scope_slug(level, category)
         write_json(out / f"radial-{slug}.json",
                    {"years": dp.radial(level, category or None)})
+
+
+# ── template + manifest rendering ─────────────────────────────────────────
+
+
+def render_index_html() -> None:
+    """Render templates/v2-index.html via Jinja with BUILD_HASH + DEPLOY_URL
+    substituted; write to dist/index.html.
+    """
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATES_SRC),
+        autoescape=select_autoescape(["html"]),
+    )
+    tmpl = env.get_template("v2-index.html")
+    html = tmpl.render(BUILD_HASH=BUILD_HASH, DEPLOY_URL=DEPLOY_URL)
+    (DIST / "index.html").write_text(html)
+
+
+def render_manifest_json() -> None:
+    """manifest.template.json → dist/manifest.json with __BUILD_HASH__ substituted.
+
+    Plain .replace() — manifest.json is JSON not Jinja, and keeping the
+    substitution mechanism dumb avoids any chance of accidental escaping.
+    """
+    src = (ROOT / "manifest.template.json").read_text()
+    rendered = src.replace("__BUILD_HASH__", BUILD_HASH)
+    (DIST / "manifest.json").write_text(rendered)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
