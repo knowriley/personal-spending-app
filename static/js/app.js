@@ -170,6 +170,13 @@ function makeTipExternal(buildSpec) {
   };
 }
 
+// Force-hide the Chart.js native tooltip element. Chart.js only hides it on its
+// own mouseleave; if a chart is re-rendered or torn down mid-hover the tooltip
+// can be stranded on screen — call this whenever the drill-down re-renders.
+function hideCjsTip() {
+  (makeTipExternal._el ??= document.getElementById('cjs-tip'))?.classList.add('hidden');
+}
+
 // Same flip logic as positionCustomTooltip, but driven by explicit viewport
 // coords (the Chart.js caret) rather than a mouse event.
 function positionCjsTip(tip, x, y) {
@@ -1076,36 +1083,28 @@ function setLensTimeframe(t) {
   catSelectedMonth = lensMonth;
   catDetailCache  = {};
   buildS1WindowPanel();
-  buildDrillDownMonthPanel();
   setHabitsPageHeader();
-  setHabitsSectionHeadings();
-  renderHabitsKpis();
   renderCategoryTree();
   renderHabitsTrend();
-  renderDrillDown();
+  if (drilldownActive()) renderDrillDown();
 }
 
-// Setter for the focused month. Drives KPIs + drill-down only — chart and tree
-// are scoped to lensTimeframe and don't need to re-render here.
+// The drill-down is "active" (and worth re-rendering) when it's on screen:
+// the side-by-side right pane (≥1024px) or an open flyout (narrow).
+function drilldownActive() {
+  if (window.innerWidth >= 1024) return true;   // right pane is `lg:block`
+  return !!document.getElementById('cat-drilldown-section')?.closest('.mh-ios-flyout');
+}
+
+// Setter for the focused month — highlights the column on the chart and updates
+// the drill-down in place when it's showing (the wide right pane, or open flyout).
 function setLensMonth(m) {
   lensMonth = m;
   catSelectedMonth = m;
   catDetailCache = {};
-  buildDrillDownMonthPanel();
   setHabitsPageHeader();
-  setHabitsSectionHeadings();
-  renderHabitsKpis();
-  renderDrillDown();
   applyMonthHighlight();
-}
-
-// Update the two H2 section headings under the Habits page header. Heading 1
-// reflects the chart's timeframe; heading 2 reflects the focused month.
-function setHabitsSectionHeadings() {
-  const tEl = document.getElementById('habits-trends-heading');
-  const dEl = document.getElementById('habits-detail-heading');
-  if (tEl) tEl.textContent = `Trends — ${labelFor(lensTimeframe)}`;
-  if (dEl) dEl.textContent = lensMonth ? `${formatMonthLabel(lensMonth)} in detail` : 'Selected month in detail';
+  if (drilldownActive()) renderDrillDown();
 }
 
 // Highlight the lensMonth column on the bar chart (others dim to 0.3 alpha).
@@ -1143,9 +1142,31 @@ function applyMonthHighlight(extraHover) {
   chart.update('none');
 }
 
-function scrollToDrilldown() {
-  document.getElementById('habits-drilldown')
-    ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+// Flyout title — the focused month (the in-flyout header carries the scope name).
+function drillFlyoutTitle() {
+  return lensMonth ? `${formatMonthLabel(lensMonth)} in detail` : 'In detail';
+}
+
+// Open the month drill-down as a right flyout (M11): re-parent the persistent
+// #cat-drilldown-section into the flyout, render into it, and move it back to its
+// hidden home (#habits-drilldown) on dismiss. Desktop pushes the chart pane to
+// 50% (compressTarget); mobile is full-screen.
+function openDrillDownFlyout() {
+  if (!window.MoneyHabitsIOS) return;
+  const host = document.getElementById('cat-drilldown-section');
+  if (!host) return;
+  MoneyHabitsIOS.openRightFlyout({
+    title: drillFlyoutTitle(),
+    content: host,
+    compressTarget: document.getElementById('habits-explorer'),
+    onDismiss: () => {
+      hideCjsTip();   // clear any tooltip stranded by tearing down the flyout charts
+      const home = document.getElementById('habits-drilldown');
+      if (home && host.parentElement !== home) home.appendChild(host);
+    },
+  });
+  // Render after the flyout is in the DOM + sized so Chart.js lays out correctly.
+  renderDrillDown();
 }
 
 // Page header (secondary nav) for the Habits tab — reads:
@@ -1207,7 +1228,6 @@ function setLensCompare(m) {
   lensCompare = m;
   catCompareMonth = m;
   renderHabitsTrend();
-  renderDrillDown();
 }
 
 function setLensScope({ level, category = '' }) {
@@ -1229,10 +1249,10 @@ function setLensScope({ level, category = '' }) {
   _radialDataCache = null;
   updateViewToggleUI();
   setHabitsPageHeader();
-  renderHabitsKpis();
   renderCategoryTree();
   renderHabitsTrend();
-  renderDrillDown();
+  // If the drill-down flyout is open, re-render it against the new scope.
+  if (drilldownActive()) renderDrillDown();
 }
 
 function setScopeAll()           { setLensScope({ level: 'all',    category: '' }); }
@@ -1243,7 +1263,7 @@ function setLensChartView(v) {
   lensChartView = v;
   updateViewToggleUI();
   renderHabitsTrend();
-  renderDrillDown();
+  if (drilldownActive()) renderDrillDown();
 }
 
 // Sync the compare-select to the current lensCompare. (Was the last surviving job
@@ -1386,6 +1406,18 @@ async function initDashboard() {
   if (mq.addEventListener) mq.addEventListener('change', onMqChange);
   else                     mq.addListener(onMqChange);  // older Safari
 
+  // Reconcile the shared drill-down across the side-by-side ↔ flyout breakpoint
+  // (1024px). Crossing either way: close an open flyout (moves the content back
+  // to its home), then render into the now-visible right pane when going wide.
+  const mqWide = window.matchMedia('(min-width: 1024px)');
+  const onWideChange = () => {
+    if (window.MoneyHabitsIOS) MoneyHabitsIOS.closeRightFlyout?.();
+    hideCjsTip();
+    if (window.innerWidth >= 1024) renderDrillDown();
+  };
+  if (mqWide.addEventListener) mqWide.addEventListener('change', onWideChange);
+  else                        mqWide.addListener(onWideChange);
+
   // Year multi-select picker (radial mode only). Panel contents are built
   // lazily by renderHabitsRadial once we have the data.
   const yearBtn   = document.getElementById('radial-year-btn');
@@ -1413,21 +1445,9 @@ async function initDashboard() {
     });
   }
 
-  // Inject drill-down skeleton.
+  // Inject drill-down skeleton (lives off-screen in #habits-drilldown until a
+  // bar click re-parents it into the flyout).
   buildCategoriesTabUI();
-
-  // Drill-down month chip (lives in the drill-down section header).
-  const ddBtn   = document.getElementById('dd-month-btn');
-  const ddPanel = document.getElementById('dd-month-panel');
-  if (ddBtn && ddPanel) {
-    wireDropdown(ddBtn, ddPanel);
-    ddBtn.addEventListener('click', e => { e.stopPropagation(); ddPanel.classList.toggle('hidden'); });
-    document.addEventListener('click', e => {
-      if (!ddBtn.contains(e.target) && !ddPanel.contains(e.target)) {
-        ddPanel.classList.add('hidden');
-      }
-    });
-  }
 
   // Page-header category chip dropdown — outside-click closes the panel.
   // The chip button is rebuilt on every scope change (innerHTML wipe inside
@@ -1460,18 +1480,17 @@ async function initDashboard() {
   lensChartView   = 'total';
 
   buildS1WindowPanel();
-  buildDrillDownMonthPanel();
   updateViewToggleUI();
   syncChartTypeUI();
   setHabitsPageHeader();
-  setHabitsSectionHeadings();
 
   await Promise.all([
-    renderHabitsKpis(),
     renderCategoryTree(),
     renderHabitsTrend(),
-    renderDrillDown(),
   ]);
+  // Side-by-side: render the right pane for the default month on load. On narrow
+  // viewports the drill-down stays closed until a bar click opens the flyout.
+  if (window.innerWidth >= 1024) renderDrillDown();
 }
 
 function buildS1WindowPanel() {
@@ -1496,99 +1515,6 @@ function buildS1WindowPanel() {
 
   const winLabel = document.getElementById('s1-window-label');
   if (winLabel) winLabel.textContent = labelFor(lensTimeframe);
-}
-
-// Drill-down month chip — independent of the chart's range. Lists every month
-// in the dataset newest first and highlights the currently focused month.
-function buildDrillDownMonthPanel() {
-  const panel = document.getElementById('dd-month-panel');
-  if (!panel) return;
-  panel.innerHTML = '';
-
-  catAllMonths.slice().reverse().forEach(m => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    const isActive = m === lensMonth;
-    b.className = ['block w-full text-left text-sm px-3 py-1.5 hover:bg-neutral-50 whitespace-nowrap',
-                   isActive ? 'bg-neutral-100 text-neutral-900 font-semibold' : ''].join(' ');
-    b.textContent = formatMonthLabel(m);
-    b.addEventListener('click', () => {
-      panel.classList.add('hidden');
-      setLensMonth(m);
-    });
-    panel.appendChild(b);
-  });
-
-  const lbl = document.getElementById('dd-month-label');
-  if (lbl) lbl.textContent = lensMonth ? formatMonthLabel(lensMonth) : '—';
-}
-
-// ── Filter-aware KPI strip ────────────────────────────────────────────────────
-// Three render modes for the Top Category/Merchant KPI value:
-//   PILL  — category chip (parent/leaf) using the shared chip style; lets long
-//           names sit in a colored pill instead of being truncated as 5xl text.
-//   FULL  — large text (used only for merchant names, which have no chip style).
-//   EMPTY — muted "no data" placeholder.
-const KPI_TOP_VALUE_PILL = ['mt-1', 'flex', 'min-w-0'];
-const KPI_TOP_VALUE_FULL = ['text-5xl', 'font-semibold', 'tracking-tight', 'text-neutral-900', 'mt-1', 'truncate'];
-const KPI_TOP_VALUE_EMPTY = ['text-sm', 'text-neutral-500', 'mt-1', 'truncate'];
-
-async function renderHabitsKpis() {
-  const params = new URLSearchParams({ level: lensLevel });
-  if (lensCategory) params.set('category', lensCategory);
-  // Pivot "this_month" / "last_month" / "top" around the focused month.
-  if (lensMonth) params.set('year_month', lensMonth);
-  // Avg averages over the chart's range so the KPI scales with the trend chart.
-  const { start: avgStart, end: avgEnd } = dateRangeFor(lensTimeframe);
-  if (avgStart) params.set('avg_start', avgStart);
-  if (avgEnd)   params.set('avg_end',   avgEnd);
-  const data = await fetch('/api/summary?' + params).then(r => r.json());
-
-  document.getElementById('kpi-this-month').textContent = fmt(data.this_month || 0);
-  document.getElementById('kpi-last-month').textContent  = fmt(data.last_month || 0);
-  document.getElementById('kpi-avg').textContent         = fmt(data.monthly_avg || 0);
-
-  // Dynamic eyebrow labels — always absolute month references reflecting the
-  // focused month, with the Avg label flipping to match the chart's range.
-  const activeMonth = lensMonth;
-  const priorMonth  = prevMonthStr(activeMonth);
-  const monthLabel  = formatMonthLabel(activeMonth);   // "May 2026"
-  const priorLabel  = formatMonthLabel(priorMonth);    // "Apr 2026"
-
-  const thisEyebrow  = document.getElementById('kpi-this-month-label');
-  const lastEyebrow  = document.getElementById('kpi-last-month-label');
-  const avgEyebrow   = document.getElementById('kpi-avg-label');
-  if (thisEyebrow) thisEyebrow.textContent = `Spent in ${monthLabel}`;
-  if (lastEyebrow) lastEyebrow.textContent = `Spent in ${priorLabel}`;
-  if (avgEyebrow)  avgEyebrow.textContent  = KPI_AVG_LABEL[lensTimeframe] || 'Monthly average';
-
-  // Top X value: when empty (no data this month for the active scope), show a
-  // muted "No data this month" placeholder instead of a heavy em dash.
-  const topEl = document.getElementById('kpi-top-cat');
-  const rawLabel = data?.top?.label;
-  const topLevel = data?.top?.level;
-  const isEmpty = !rawLabel || rawLabel === '—';
-  topEl.classList.remove(...KPI_TOP_VALUE_PILL, ...KPI_TOP_VALUE_FULL, ...KPI_TOP_VALUE_EMPTY);
-  if (isEmpty) {
-    topEl.textContent = 'No data this month';
-    topEl.classList.add(...KPI_TOP_VALUE_EMPTY);
-  } else if (topLevel === 'parent' || topLevel === 'leaf') {
-    topEl.classList.add(...KPI_TOP_VALUE_PILL);
-    topEl.innerHTML = `<span class="inline-flex items-center gap-1.5 text-lg font-medium px-3.5 py-1.5 rounded-full max-w-full truncate" style="${catChipStyle(rawLabel)}">${catLabelHtml(rawLabel)}</span>`;
-  } else {
-    topEl.textContent = rawLabel;
-    topEl.classList.add(...KPI_TOP_VALUE_FULL);
-  }
-
-  const labelEl = document.getElementById('kpi-top-cat-label');
-  if (labelEl) {
-    const base = {
-      parent:   'Top Category',
-      leaf:     'Top Category',   // (was 'Top Child' — never use 'Child' in user copy)
-      merchant: 'Top Merchant',
-    }[data?.top?.level] || 'Top Category';
-    labelEl.textContent = `${base} ${monthLabel}`;
-  }
 }
 
 // ── Hierarchical category tree (left rail) ────────────────────────────────────
@@ -1896,7 +1822,10 @@ async function renderHabitsChart() {
           }
         }
         const monthKey = periods[index];
-        if (monthKey) { setLensMonth(monthKey); scrollToDrilldown(); }
+        if (monthKey) {
+          setLensMonth(monthKey);                                    // updates the wide right pane in place
+          if (window.innerWidth < 1024) openDrillDownFlyout();       // narrow: open the flyout
+        }
       },
       onHover: (evt, elements, ch) => {
         const idx = elements.length ? elements[0].index : -1;
@@ -2129,13 +2058,14 @@ async function renderHabitsRadial() {
       applyRadialHighlight(year);
     },
     onMonthLeave: () => { hideCustomTooltip(); applyRadialHighlight(); },
-    // Click a node → setLensMonth + scroll AND toggle the year-highlight pin.
+    // Click a node → focus month (updates the wide pane) + toggle the pin;
+    // open the flyout only on narrow viewports.
     onMonthClick: ({ year, month }) => {
       const monthKey = `${year}-${String(month).padStart(2, '0')}`;
       radialHighlightYear = (radialHighlightYear === year) ? null : year;
       applyRadialHighlight();
       setLensMonth(monthKey);
-      scrollToDrilldown();
+      if (window.innerWidth < 1024) openDrillDownFlyout();
     },
     // Legend swatch → pin toggle (no month chosen, so no drill-down nav).
     onYearClick: (year) => {
@@ -2364,29 +2294,18 @@ function buildCategoriesTabUI() {
   ddSec.innerHTML = `
     <div id="dd-inner" class="bg-white border border-neutral-200 rounded-lg p-6 flex flex-col gap-6">
 
-      <!-- Header -->
-      <div class="flex items-center justify-between gap-3">
-        <div class="flex items-center gap-3 min-w-0">
-          <span id="dd-color-dot" class="w-10 h-10 rounded-full flex-none inline-flex items-center justify-center text-xl"></span>
-          <h3 id="dd-cat-name" class="font-bold text-2xl text-neutral-500 truncate"></h3>
-        </div>
-
-        <!-- Focused-month picker — drives KPIs + drill-down only -->
-        <div class="relative shrink-0" id="dd-month-dropdown">
-          <button id="dd-month-btn" type="button"
-            class="flex items-center gap-2 text-sm font-semibold text-neutral-700 border border-neutral-300 rounded-lg px-3 py-2 bg-white shadow-sm hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-accent-700">
-            <span id="dd-month-label">—</span>
-            <svg class="w-3.5 h-3.5 text-neutral-400 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"/>
-            </svg>
-          </button>
-          <div id="dd-month-panel"
-            class="hidden absolute right-0 z-20 mt-1 min-w-[12rem] bg-white border border-neutral-200 rounded-xl shadow-lg py-1 max-h-80 overflow-y-auto"></div>
+      <!-- Header — category identity + the focused month (side-by-side has no
+           flyout title, so the month label lives here). -->
+      <div class="flex items-center gap-3 min-w-0">
+        <span id="dd-color-dot" class="w-10 h-10 rounded-full flex-none inline-flex items-center justify-center text-xl"></span>
+        <div class="min-w-0">
+          <h3 id="dd-cat-name" class="font-bold text-2xl text-neutral-500 truncate leading-tight"></h3>
+          <p id="dd-month-heading" class="text-sm text-neutral-500"></p>
         </div>
       </div>
 
-      <!-- Row 1: 5-col grid — pie (2 cols) | quick stats (3 cols). Stacks at <md. -->
-      <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
+      <!-- Row 1: pie + quick stats, stacked (the drill-down pane is narrow). -->
+      <div class="grid grid-cols-1 gap-6">
         <!-- Pie card: col 1-2 -->
         <div class="col-span-1 md:col-span-2 bg-white border border-neutral-200 rounded-lg shadow-sm overflow-hidden flex flex-col">
           <div class="px-6 pt-6 pb-3 shrink-0 flex flex-col items-start gap-3">
@@ -2409,8 +2328,8 @@ function buildCategoriesTabUI() {
         <div id="dd-quick-stats" class="col-span-1 md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4 self-stretch"></div>
       </div>
 
-      <!-- Row 2: 5-col grid — cumulative chart (3 cols) | top locations (2 cols). Stacks at <md. -->
-      <div class="grid grid-cols-1 md:grid-cols-5 gap-5">
+      <!-- Row 2: cumulative chart + top locations, stacked. -->
+      <div class="grid grid-cols-1 gap-5">
         <!-- Cumulative chart: col 1-3 -->
         <div class="col-span-1 md:col-span-3 bg-white border border-neutral-200 rounded-lg shadow-sm flex flex-col">
           <div class="px-6 pt-6 pb-0 flex items-center justify-between shrink-0">
@@ -2503,6 +2422,9 @@ async function renderDrillDown() {
 
 function renderDrillDownView(data, compareData) {
   if (!data) return;
+  // Clear any tooltip stranded by the previous render's chart teardown.
+  hideCustomTooltip();
+  hideCjsTip();
 
   const monthLabel = formatMonthLabel(data.year_month);
   const level = data.level || 'leaf';
@@ -2520,6 +2442,8 @@ function renderDrillDownView(data, compareData) {
     }
   }
   document.getElementById('dd-cat-name').textContent = headerName;
+  const ddMonthHeading = document.getElementById('dd-month-heading');
+  if (ddMonthHeading) ddMonthHeading.textContent = `${monthLabel} in detail`;
 
   // Locations card title swaps by scope.
   const locTitle = document.getElementById('dd-locations-title');

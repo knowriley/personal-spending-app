@@ -75,7 +75,7 @@
     <!-- Large-title block — shared, repopulated per tab by the header renderers.
          Mobile: fades + shrinks into the sticky bar on scroll (origin top-left).
          Desktop: a static large title that simply scrolls with content. -->
-    <div id="large-title-block" class="max-w-6xl mx-auto px-4 sm:px-6 pt-4 md:pt-10 pb-4" style="transform-origin: left top;">
+    <div id="large-title-block" class="max-w-[1600px] mx-auto px-4 sm:px-6 pt-4 md:pt-10 pb-4" style="transform-origin: left top;">
       <div class="relative inline-block">
         <h1 id="page-title" class="text-3xl md:text-4xl font-bold tracking-tight text-neutral-900">Overview</h1>
         <!-- Habits-only category chip dropdown (anchored under the heading) -->
@@ -88,7 +88,7 @@
     </div>
 
     <!-- Tab content (extra bottom padding clears the fixed mobile tab bar) -->
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 pb-28 md:pb-10">
+    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 pb-28 md:pb-10">
       {% block content %}{% endblock %}
     </div>
   </main>

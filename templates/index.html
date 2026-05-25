@@ -16,35 +16,13 @@
 <!-- ── HABITS TAB (formerly Dashboard) ─────────────────────────── -->
 <section id="section-habits" role="tabpanel" aria-labelledby="tab-habits" tabindex="0" class="hidden focus:outline-none">
 
-<!-- Section heading 1: trends — multi-month context (KPIs + chart card). -->
-<h2 id="habits-trends-heading" class="text-xl font-semibold text-neutral-900 mb-4">Trends</h2>
+<!-- ── Two-pane: chart (left) + month drill-down (right). At ≥1024px both show
+     side-by-side, 50/50; below that the right pane is the off-screen home and the
+     drill-down opens as a flyout on bar click (openDrillDownFlyout). -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start mb-6">
 
-<!-- ── Habits explorer: KPI + chart stacked, scope nav lives in the page-header chip -->
-<div id="habits-explorer" class="mb-12">
-
-  <div class="flex flex-col gap-6 min-w-0">
-
-    <!-- KPI card — values re-render against the active scope (all / parent / leaf) -->
-    <div id="habits-kpi-card" class="bg-white rounded-lg border border-neutral-200 p-5 sm:p-6">
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">
-        <div class="min-w-0">
-          <p id="kpi-this-month-label" class="text-base font-semibold text-neutral-500">This Month</p>
-          <p id="kpi-this-month" class="text-5xl font-semibold tracking-tight text-neutral-900 tabular-nums mt-1 truncate">—</p>
-        </div>
-        <div class="min-w-0">
-          <p id="kpi-last-month-label" class="text-base font-semibold text-neutral-500">Last Month</p>
-          <p id="kpi-last-month" class="text-5xl font-semibold tracking-tight text-neutral-900 tabular-nums mt-1 truncate">—</p>
-        </div>
-        <div class="min-w-0">
-          <p id="kpi-avg-label" class="text-base font-semibold text-neutral-500">12-Mo Avg</p>
-          <p id="kpi-avg" class="text-5xl font-semibold tracking-tight text-neutral-900 tabular-nums mt-1 truncate">—</p>
-        </div>
-        <div class="min-w-0">
-          <p id="kpi-top-cat-label" class="text-base font-semibold text-neutral-500">Top Category</p>
-          <p id="kpi-top-cat" class="text-5xl font-semibold tracking-tight text-neutral-900 mt-1 truncate">—</p>
-        </div>
-      </div>
-    </div>
+  <!-- Left: chart card. Also the flyout's compressTarget on narrow. -->
+  <div id="habits-explorer" class="min-w-0">
 
     <!-- Chart card -->
     <div id="habits-chart-card" class="bg-white rounded-lg border border-neutral-200 p-6 sm:p-8">
@@ -120,18 +98,16 @@
     <div id="chart-radial" class="w-full hidden" style="height:420px"></div>
     </div><!-- /habits-chart-card -->
 
-  </div><!-- /chart column wrapper -->
+  </div><!-- /habits-explorer (chart pane) -->
 
-</div><!-- /habits-explorer -->
+  <!-- Right: month drill-down. Visible side-by-side at ≥1024px; below that it's
+       hidden and serves as the off-screen home — #cat-drilldown-section is
+       re-parented into the flyout on bar click and moved back here on dismiss. -->
+  <div id="habits-drilldown" class="hidden lg:block min-w-0">
+    <div id="cat-drilldown-section"></div>
+  </div>
 
-
-<!-- Section heading 2: single-month deep dive. -->
-<h2 id="habits-detail-heading" class="text-xl font-semibold text-neutral-900 mb-4">Selected month in detail</h2>
-
-<!-- ── Drill-down (always rendered; scope-aware contents) ────── -->
-<div id="habits-drilldown" class="mb-12">
-  <div id="cat-drilldown-section"></div>
-</div>
+</div><!-- /two-pane grid -->
 
 
 </section><!-- /section-habits -->
