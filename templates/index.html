@@ -4,13 +4,12 @@
 
 <!-- ── OVERVIEW TAB ────────────────────────────────────────────── -->
 <section id="section-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0" class="hidden focus:outline-none">
-  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+  <!-- v2: single-column stack — snapshot, cumulative chart, top categories. -->
+  <div class="flex flex-col gap-4 max-w-2xl">
     <div id="overview-card1"></div>
-    <div id="overview-card2"></div>
-    <div id="overview-card3"></div>
+    <div id="overview-chart-card" class="bg-white border border-neutral-200 rounded-lg p-4 sm:p-6"></div>
     <div id="overview-card4"></div>
   </div>
-  <div id="overview-chart-card" class="bg-white border border-neutral-200 rounded-lg p-4 sm:p-6"></div>
 </section>
 
 

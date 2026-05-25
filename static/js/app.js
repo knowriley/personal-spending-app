@@ -487,6 +487,7 @@ const OVERVIEW_DEFAULT_EXCLUDES = ['Rent'];
 let overviewInited   = false;
 let overviewSnapshot = null;
 let overviewMonths   = [];
+let overviewOverlay  = false;   // cumulative chart: false = single line, true = overlay last month
 
 async function initOverviewTab() {
   if (overviewInited) return;
@@ -527,10 +528,9 @@ async function loadAndRenderOverview(month) {
   } catch (e) { /* swallow — render empty */ }
   topCats = (topCats || []).slice(0, 3);
 
+  overviewOverlay = false;   // each month opens with the single-line default
   renderOverviewHeader(snap);
   renderCard1(snap);
-  renderCard2(snap);
-  renderCard3(snap);
   renderCard4(topCats, snap.month);
   renderOverviewLineChart(snap);
   wireOverviewActions(snap);
@@ -671,6 +671,9 @@ function buildOverviewMonthPanel(activeMonth) {
     chip.dataset.ovToggleWired = '1';
     chip.addEventListener('click', e => {
       e.stopPropagation();
+      // Mobile: a bottom sheet (the large title shrinks on scroll, so an
+      // anchored dropdown is awkward). Desktop: the anchored dropdown.
+      if (window.innerWidth < 768) { openOverviewMonthSheet(); return; }
       panel.classList.toggle('hidden');
     });
     document.addEventListener('click', e => {
@@ -679,6 +682,30 @@ function buildOverviewMonthPanel(activeMonth) {
       }
     });
   }
+}
+
+// Mobile month picker — a bottom sheet listing the dataset's months, newest
+// first, active one highlighted. Reads the current month from overviewSnapshot.
+function openOverviewMonthSheet() {
+  if (!window.MoneyHabitsIOS) return;
+  const activeMonth = overviewSnapshot?.month;
+  const months = (overviewMonths.length ? overviewMonths.slice() : []);
+  if (activeMonth && !months.includes(activeMonth)) months.push(activeMonth);
+  months.sort();
+
+  const wrap = document.createElement('div');
+  wrap.className = 'px-2 pb-4';
+  months.slice().reverse().forEach(m => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    const isActive = m === activeMonth;
+    b.className = ['block w-full text-left px-3 py-3 rounded-lg',
+                   isActive ? 'bg-neutral-100 text-neutral-900 font-semibold' : 'text-neutral-700 hover:bg-neutral-50'].join(' ');
+    b.textContent = formatMonthLabel(m);
+    b.addEventListener('click', () => { MoneyHabitsIOS.closeBottomSheet(); setOverviewMonth(m); });
+    wrap.appendChild(b);
+  });
+  MoneyHabitsIOS.openBottomSheet({ title: 'Select month', content: wrap });
 }
 
 const OVERVIEW_INFO_ICON = `
@@ -750,72 +777,6 @@ function renderCard1(snap) {
   `;
 }
 
-function renderCard2(snap) {
-  const card = document.getElementById('overview-card2');
-  if (!card) return;
-
-  const lastMonth = prevMonthOf(snap.month);
-  const lastMonthLabel = formatMonthLabel(lastMonth);
-
-  // Partial focused month → MTD-vs-MTD comparison ("Through Apr 9").
-  // Complete focused month → full prior-month total ("Spent in March 2026").
-  let label, value, has;
-  if (snap.is_partial) {
-    has = snap.last_month_mtd != null;
-    value = snap.last_month_mtd;
-    const lmShortMonth = lastMonthLabel.split(' ')[0].slice(0, 3);
-    label = `Through ${lmShortMonth} ${snap.through_day}`;
-  } else {
-    has = snap.last_month_total != null;
-    value = snap.last_month_total;
-    label = `Spent in ${lastMonthLabel}`;
-  }
-
-  const valueHtml = has
-    ? `<p class="${CARD_VALUE}">${fmt(value)}</p>`
-    : `<p class="${CARD_VALUE_MISS}" title="No prior month yet">—</p>`;
-  const bottomHtml = has
-    ? `<div class="mt-auto pt-6">${linkButton('See transactions', 'tx-prev-partial')}</div>`
-    : '';
-
-  card.innerHTML = `
-    <div class="${CARD_SHELL}">
-      <p class="${CARD_LABEL}">${escHtml(label)}</p>
-      ${valueHtml}
-      ${bottomHtml}
-    </div>
-  `;
-}
-
-function renderCard3(snap) {
-  const card = document.getElementById('overview-card3');
-  if (!card) return;
-
-  const has = snap.three_month_avg != null;
-  const valueHtml = has
-    ? `<p class="${CARD_VALUE}">${fmt(snap.three_month_avg)}</p>`
-    : `<p class="${CARD_VALUE_MISS}" title="Need 3 prior months">—</p>`;
-  const bottomHtml = has
-    ? `<div class="mt-auto pt-6">${linkButton('Open in Habits', 'habits-3mo')}</div>`
-    : '';
-
-  const range = threeMonthAvgRangeLabel(snap.month);
-  const tooltipText = has && range
-    ? `Average of ${range} — the 3 most recent complete months.`
-    : 'Calculated from the last 3 complete months of spending.';
-
-  card.innerHTML = `
-    <div class="${CARD_SHELL}">
-      <p class="${CARD_LABEL} flex items-center gap-1.5">
-        <span>3-month average</span>
-        ${infoTooltip(tooltipText)}
-      </p>
-      ${valueHtml}
-      ${bottomHtml}
-    </div>
-  `;
-}
-
 function renderCard4(topCats, month) {
   const el = document.getElementById('overview-card4');
   if (!el) return;
@@ -860,16 +821,10 @@ function wireOverviewActions(snap) {
   });
 }
 
-// Cumulative chart heading: live month gets the "so far" framing; past complete
-// months get the "Total spend" framing. Both name the actual months to mirror
-// the dynamic card labels.
+// Cumulative chart heading. The overlay toggle (not the title) now carries the
+// month-vs-month comparison, so the title just names the cumulative view.
 function chartTitleFor(month) {
-  const now = new Date();
-  const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const thisLabel = formatMonthLabel(month);
-  const lastLabel = formatMonthLabel(prevMonthOf(month));
-  if (month === currentYm) return `Spent so far in ${thisLabel} vs ${lastLabel}`;
-  return `Total spend ${thisLabel} vs ${lastLabel}`;
+  return `Cumulative spend in ${formatMonthLabel(month)}`;
 }
 
 function renderOverviewLineChart(snap) {
@@ -882,10 +837,31 @@ function renderOverviewLineChart(snap) {
   destroyChart('overview-chart');
 
   const chartH = window.innerWidth < 768 ? 240 : 320;
+  const lastLabel = formatMonthLabel(prevMonthOf(snap.month));
+  const hasLast = !!(snap.last_cumulative && snap.last_cumulative.length);
+  // Overlay toggle (only meaningful when there's a prior month to overlay).
+  const toggleHtml = hasLast ? `
+    <button type="button" id="ov-overlay-toggle" role="switch" aria-checked="${overviewOverlay}"
+      class="flex items-center gap-2 shrink-0 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-full">
+      <span class="text-xs text-neutral-500 whitespace-nowrap">Overlay ${escHtml(lastLabel)}</span>
+      <span class="relative inline-block w-9 h-5 rounded-full transition-colors ${overviewOverlay ? 'bg-accent-700' : 'bg-neutral-300'}">
+        <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${overviewOverlay ? 'translate-x-4' : ''}"></span>
+      </span>
+    </button>` : '';
+
   container.innerHTML = `
-    <p class="text-lg font-semibold text-neutral-900">${escHtml(chartTitleFor(snap.month))}</p>
+    <div class="flex items-center justify-between gap-3">
+      <p class="text-base font-semibold text-neutral-900">${escHtml(chartTitleFor(snap.month))}</p>
+      ${toggleHtml}
+    </div>
     <div id="overview-chart" class="w-full mt-3" style="height:${chartH}px"></div>
   `;
+
+  // Toggle flips overlay state and re-renders just the chart card.
+  document.getElementById('ov-overlay-toggle')?.addEventListener('click', () => {
+    overviewOverlay = !overviewOverlay;
+    renderOverviewLineChart(snap);
+  });
 
   const accentColor = token('color-accent-700');
   const greyColor   = token('color-gray-400');
@@ -918,11 +894,12 @@ function renderOverviewLineChart(snap) {
       tension: 0, spanGaps: true,
     });
   }
-  if (snap.last_cumulative?.length) {
+  // Last-month line only when the overlay toggle is on (single-line default).
+  if (overviewOverlay && snap.last_cumulative?.length) {
     datasets.push({
-      label: 'Last month',
+      label: `Last month (${lastLabel})`,
       data: seriesByDay(snap.last_cumulative),
-      borderColor: greyColor, borderWidth: 2, fill: false,
+      borderColor: greyColor, borderWidth: 2, borderDash: [4, 3], fill: false,
       pointRadius: 0, pointHoverRadius: 9,
       pointHoverBackgroundColor: greyColor,
       pointHoverBorderColor: token('color-white'), pointHoverBorderWidth: 2,
@@ -945,8 +922,9 @@ function renderOverviewLineChart(snap) {
              title: { display: true, text: 'Spend', color: token('color-gray-500'), font: { size: 12 } } },
       },
       plugins: {
-        legend: { display: datasets.length > 0, position: 'top', align: 'end',
-                  labels: { usePointStyle: true, boxWidth: 8, font: { size: 12 } } },
+        // No legend — single line by default; the overlay toggle + tooltip label
+        // identify the dashed last-month line when shown.
+        legend: { display: false },
         tooltip: { enabled: false, external: makeTipExternal(cjsTipOverviewCumul) },
       },
     },
