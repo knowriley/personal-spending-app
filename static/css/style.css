@@ -164,6 +164,49 @@
    to 33vw, pushing the main content area to the left. The inner div stays
    fixed-width so content doesn't reflow during the transition. */
 
+/* ── Navigation (side rail + bottom tab bar) ─────────────────────────────────
+   One SVG per button: inactive = outline (fill:none, stroke currentColor),
+   active = filled (fill:currentColor) for the closed-shape icons. The list icon
+   is line-only so it just changes color. Active color is accent-700; the rail
+   additionally tints the whole cell with accent-50. */
+.nav-btn {
+  display: flex;
+  align-items: center;
+  color: var(--color-gray-500);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.nav-btn:focus-visible { outline: 2px solid var(--color-accent-700); outline-offset: -2px; }
+.nav-btn.is-active { color: var(--color-accent-700); }
+.nav-label { line-height: 1; font-weight: 500; }
+.nav-btn.is-active .nav-label { font-weight: 600; }
+
+.nav-icon { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.nav-btn.is-active .nav-icon { fill: currentColor; }
+
+/* Rail row (desktop): inline icon + label, left-aligned, rounded highlight. */
+.rail-btn {
+  flex-direction: row;
+  gap: 12px;
+  height: 40px;
+  padding: 0 12px;
+  margin: 2px 8px;
+  border-radius: 8px;
+}
+.rail-btn .nav-label { font-size: 14px; }
+.rail-btn:not(.is-active):hover { background: var(--color-gray-100); }
+.rail-btn.is-active { background: var(--color-accent-50); }
+
+/* Bottom-bar cell (mobile): stacked icon + label, equal thirds. */
+.bottom-btn {
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding-top: 8px;
+  padding-bottom: 6px;
+}
+.bottom-btn .nav-label { font-size: 11px; }
+
 #txn-panel {
   width: 0;
   transition: width 0.3s ease-in-out;

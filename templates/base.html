@@ -19,47 +19,65 @@
   <script src="/static/js/chart.umd.min.js"></script>
   <script src="/static/js/chartjs-plugin-datalabels.min.js"></script>
   <script src="/static/js/radial.js"></script>
+  <!-- iOS interaction primitives (bottom sheet, large-title scroll). Must load
+       before app.js, which calls window.MoneyHabitsIOS at boot. -->
+  <script src="/static/js/ios.js"></script>
 
   <!-- App styles -->
   <link rel="stylesheet" href="/static/css/style.css" />
 </head>
-<body class="bg-neutral-50 text-neutral-900 font-sans antialiased h-full flex flex-col overflow-hidden">
+<body class="bg-neutral-50 text-neutral-900 font-sans antialiased h-full overflow-hidden md:flex">
 
-  <!-- Top nav -->
-  <header class="bg-white border-b border-neutral-200 shrink-0 z-20">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between h-14">
-      <button id="brand-home-btn" type="button"
-        class="font-semibold text-neutral-800 tracking-tight cursor-pointer hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-md">
-        MoneyHabits
-      </button>
+  <!-- ── Desktop left side rail (≥768px) ─────────────────────────────────── -->
+  <nav id="side-rail" aria-label="Main sections"
+       class="hidden md:flex md:flex-col w-60 shrink-0 bg-white border-r border-neutral-200 z-40 py-3">
+    <!-- Profile / dataset switcher (Notion-style) — shows the active persona;
+         click opens #profile-panel. Populated by initProfileSwitcher(). -->
+    <button type="button" id="profile-btn" aria-haspopup="true" aria-expanded="false"
+      class="flex items-center gap-2.5 mx-2 mb-3 px-2.5 py-2 rounded-lg hover:bg-neutral-100 focus:outline-none focus:ring-2 focus:ring-accent-700">
+      <span id="profile-badge" class="w-7 h-7 rounded-md bg-accent-100 text-accent-700 text-xs font-semibold flex items-center justify-center shrink-0" aria-hidden="true">·</span>
+      <span id="profile-name" class="flex-1 min-w-0 text-sm font-semibold text-neutral-800 truncate text-left">Dataset</span>
+      <svg class="w-4 h-4 text-neutral-400 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"/></svg>
+    </button>
 
-      <div class="flex items-center gap-3">
-        <nav class="flex gap-1" id="tab-nav" role="tablist" aria-label="Main sections">
-          <button data-tab="overview"     id="tab-overview"     type="button" role="tab" aria-selected="true"  aria-controls="section-overview"     tabindex="0"  class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700">Overview</button>
-          <button data-tab="habits"       id="tab-habits"       type="button" role="tab" aria-selected="false" aria-controls="section-habits"       tabindex="-1" class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700">Habits</button>
-          <button data-tab="transactions" id="tab-transactions" type="button" role="tab" aria-selected="false" aria-controls="section-transactions" tabindex="-1" class="tab-btn px-3 py-1.5 text-sm font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700">Transactions</button>
-        </nav>
+    <button type="button" data-tab="overview" id="tab-overview" class="nav-btn rail-btn">
+      <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+      <span class="nav-label">Overview</span>
+    </button>
+    <button type="button" data-tab="habits" id="tab-habits" class="nav-btn rail-btn">
+      <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="12" width="4" height="8.5" rx="1"/><rect x="10" y="6" width="4" height="14.5" rx="1"/><rect x="16.5" y="9" width="4" height="11.5" rx="1"/></svg>
+      <span class="nav-label">Habits</span>
+    </button>
+    <button type="button" data-tab="transactions" id="tab-transactions" class="nav-btn rail-btn">
+      <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+      <span class="nav-label">Transactions</span>
+    </button>
+  </nav>
 
-        <div class="relative" id="dataset-switcher">
-          <button id="dataset-switcher-btn" type="button"
-            class="flex items-center gap-2 text-sm font-medium text-neutral-700 border border-neutral-200 rounded-md px-3 py-1.5 bg-white hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-accent-700">
-            <span id="dataset-switcher-label">…</span>
-            <svg class="w-3.5 h-3.5 text-neutral-400 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"/>
-            </svg>
-          </button>
-          <div id="dataset-switcher-panel"
-            class="hidden absolute right-0 z-20 mt-1 min-w-[14rem] bg-white border border-neutral-200 rounded-xl shadow-lg py-1"></div>
+  <!-- ── Main scroll area (offset by the rail on desktop) ─────────────────── -->
+  <main id="app-scroll" class="flex-1 h-full overflow-y-auto min-w-0">
+
+    <!-- Mobile sticky header — shrink target (#sticky-fade fades in on scroll)
+         plus an always-visible profile badge. Hidden on desktop (the profile
+         switcher lives at the top of the rail). -->
+    <header id="sticky-header" class="md:hidden sticky top-0 z-30" style="padding-top: env(safe-area-inset-top);">
+      <div class="relative h-12">
+        <div id="sticky-fade" class="absolute inset-0 bg-white border-b border-neutral-200 flex items-center px-4">
+          <span id="sticky-title" class="text-lg font-semibold text-neutral-900 truncate">Overview</span>
         </div>
+        <button type="button" id="profile-badge-mobile" aria-haspopup="true" aria-expanded="false" aria-label="Switch dataset"
+          class="absolute right-2 top-1/2 -translate-y-1/2 z-10 rounded-md focus:outline-none focus:ring-2 focus:ring-accent-700">
+          <span class="w-8 h-8 rounded-md bg-accent-100 text-accent-700 text-sm font-semibold flex items-center justify-center" aria-hidden="true">·</span>
+        </button>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <!-- Secondary nav: active page title + supporting info -->
-  <div class="bg-white border-b border-neutral-200 shrink-0 z-10">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+    <!-- Large-title block — shared, repopulated per tab by the header renderers.
+         Mobile: fades + shrinks into the sticky bar on scroll (origin top-left).
+         Desktop: a static large title that simply scrolls with content. -->
+    <div id="large-title-block" class="max-w-6xl mx-auto px-4 sm:px-6 pt-4 md:pt-10 pb-4" style="transform-origin: left top;">
       <div class="relative inline-block">
-        <h1 id="page-title" class="text-3xl font-semibold tracking-tight text-neutral-900">Overview</h1>
+        <h1 id="page-title" class="text-3xl md:text-4xl font-bold tracking-tight text-neutral-900">Overview</h1>
         <!-- Habits-only category chip dropdown (anchored under the heading) -->
         <div id="hc-chip-panel"
              class="hidden absolute left-0 mt-2 min-w-[18rem] max-w-[calc(100vw-2rem)] max-h-[60vh] overflow-y-auto bg-white border border-neutral-200 rounded-xl shadow-lg z-30 py-2">
@@ -68,69 +86,80 @@
       </div>
       <p id="page-subtitle" class="text-sm text-neutral-600 mt-1">&nbsp;</p>
     </div>
-  </div>
 
-  <!-- Layout: scrollable main + slide-in panel -->
-  <div class="flex flex-1 overflow-hidden">
+    <!-- Tab content (extra bottom padding clears the fixed mobile tab bar) -->
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 pb-28 md:pb-10">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
 
-    <main id="app-main" class="flex-1 overflow-y-auto min-w-0">
-      <div class="max-w-6xl mx-auto px-4 sm:px-6 py-8">
-        {% block content %}{% endblock %}
-      </div>
-    </main>
+  <!-- ── Mobile bottom tab bar (<768px) ──────────────────────────────────── -->
+  <nav id="bottom-nav" aria-label="Main sections"
+       class="md:hidden fixed inset-x-0 bottom-0 z-40 bg-white border-t border-neutral-200"
+       style="padding-bottom: calc(env(safe-area-inset-bottom) + 8px);">
+    <div class="flex">
+      <button type="button" data-tab="overview" class="nav-btn bottom-btn flex-1">
+        <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+        <span class="nav-label">Overview</span>
+      </button>
+      <button type="button" data-tab="habits" class="nav-btn bottom-btn flex-1">
+        <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="12" width="4" height="8.5" rx="1"/><rect x="10" y="6" width="4" height="14.5" rx="1"/><rect x="16.5" y="9" width="4" height="11.5" rx="1"/></svg>
+        <span class="nav-label">Habits</span>
+      </button>
+      <button type="button" data-tab="transactions" class="nav-btn bottom-btn flex-1">
+        <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+        <span class="nav-label">Transactions</span>
+      </button>
+    </div>
+  </nav>
 
-    <!-- Transaction side panel — pushed layout, 33vw when open -->
-    <aside id="txn-panel" aria-label="Transaction details" class="shrink-0 overflow-hidden border-l border-neutral-200 bg-white flex flex-col">
-      <div class="txn-panel-inner h-full flex flex-col">
-
-        <!-- Header -->
-        <div class="flex items-start justify-between px-5 py-4 border-b border-neutral-100 shrink-0">
-          <div>
-            <p id="txn-panel-title" class="font-semibold text-neutral-900 text-sm"></p>
-            <div class="flex items-center gap-1.5 mt-0.5">
-              <span id="txn-panel-color-dot" class="inline-block w-2 h-2 rounded-full shrink-0"></span>
-              <p id="txn-panel-meta" class="text-xs text-neutral-500"></p>
-            </div>
+  <!-- Transaction side panel — dormant (hidden). Kept for a future detail surface;
+       openTxnPanel is currently unreferenced. -->
+  <aside id="txn-panel" aria-label="Transaction details" class="hidden fixed inset-y-0 right-0 overflow-hidden border-l border-neutral-200 bg-white flex-col z-40">
+    <div class="txn-panel-inner h-full flex flex-col">
+      <div class="flex items-start justify-between px-5 py-4 border-b border-neutral-100 shrink-0">
+        <div>
+          <p id="txn-panel-title" class="font-semibold text-neutral-900 text-sm"></p>
+          <div class="flex items-center gap-1.5 mt-0.5">
+            <span id="txn-panel-color-dot" class="inline-block w-2 h-2 rounded-full shrink-0"></span>
+            <p id="txn-panel-meta" class="text-xs text-neutral-500"></p>
           </div>
-          <button id="txn-panel-close" type="button" aria-label="Close transaction panel"
-            class="ml-2 -mt-1 -mr-1 p-2 text-neutral-500 hover:text-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700 rounded">
-            <svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
-            </svg>
-          </button>
         </div>
-
-        <!-- Callout total -->
-        <div class="px-5 pt-5 pb-4 border-b border-neutral-100 shrink-0">
-          <p id="txn-panel-callout" class="text-3xl font-bold text-neutral-900 tabular-nums tracking-tight"></p>
-          <p class="text-xs text-neutral-500 mt-1">total spent</p>
-        </div>
-
-        <!-- Table -->
-        <div class="overflow-y-auto flex-1">
-          <table class="w-full text-sm">
-            <thead class="sticky top-0 bg-white border-b border-neutral-100">
-              <tr>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Date</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Merchant</th>
-                <th class="px-5 py-2.5 text-right text-xs font-semibold text-neutral-500 uppercase tracking-wide">Amount</th>
-              </tr>
-            </thead>
-            <tbody id="txn-panel-tbody" class="divide-y divide-neutral-50"></tbody>
-          </table>
-          <p id="txn-panel-empty" class="hidden text-center text-sm text-neutral-500 py-12">No transactions found.</p>
-        </div>
-
-        <!-- Footer -->
-        <div class="px-5 py-3 border-t border-neutral-100 shrink-0 flex justify-between items-center">
-          <span class="text-xs text-neutral-500" id="txn-panel-count"></span>
-          <span class="text-sm font-semibold text-neutral-800" id="txn-panel-total"></span>
-        </div>
-
+        <button id="txn-panel-close" type="button" aria-label="Close transaction panel"
+          class="ml-2 -mt-1 -mr-1 p-2 text-neutral-500 hover:text-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-700 rounded">
+          <svg class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>
+          </svg>
+        </button>
       </div>
-    </aside>
+      <div class="px-5 pt-5 pb-4 border-b border-neutral-100 shrink-0">
+        <p id="txn-panel-callout" class="text-3xl font-bold text-neutral-900 tabular-nums tracking-tight"></p>
+        <p class="text-xs text-neutral-500 mt-1">total spent</p>
+      </div>
+      <div class="overflow-y-auto flex-1">
+        <table class="w-full text-sm">
+          <thead class="sticky top-0 bg-white border-b border-neutral-100">
+            <tr>
+              <th class="px-5 py-2.5 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Date</th>
+              <th class="px-5 py-2.5 text-left text-xs font-semibold text-neutral-500 uppercase tracking-wide">Merchant</th>
+              <th class="px-5 py-2.5 text-right text-xs font-semibold text-neutral-500 uppercase tracking-wide">Amount</th>
+            </tr>
+          </thead>
+          <tbody id="txn-panel-tbody" class="divide-y divide-neutral-50"></tbody>
+        </table>
+        <p id="txn-panel-empty" class="hidden text-center text-sm text-neutral-500 py-12">No transactions found.</p>
+      </div>
+      <div class="px-5 py-3 border-t border-neutral-100 shrink-0 flex justify-between items-center">
+        <span class="text-xs text-neutral-500" id="txn-panel-count"></span>
+        <span class="text-sm font-semibold text-neutral-800" id="txn-panel-total"></span>
+      </div>
+    </div>
+  </aside>
 
-  </div>
+  <!-- Profile / dataset switcher dropdown — shared by the desktop rail's
+       #profile-btn and the mobile sticky-header #profile-badge-mobile. Positioned
+       near whichever trigger opened it, by initProfileSwitcher() in app.js. -->
+  <div id="profile-panel" class="hidden fixed z-50 min-w-[14rem] max-w-[18rem] bg-white border border-neutral-200 rounded-xl shadow-lg py-1"></div>
 
   <!-- Custom DOM tooltip — used by the hand-rolled SVG radial chart (mouse-event
        driven via showCustomTooltip). The Chart.js charts use #cjs-tip below. -->

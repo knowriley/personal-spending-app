@@ -200,7 +200,13 @@ function setPageHeader(title, subtitle = '') {
   if (subEl)   subEl.innerHTML = subtitle ? escHtml(subtitle) : '&nbsp;';
 }
 
-function showTab(name) {
+// Map the URL hash to a tab name (or null if it isn't one of ours).
+function tabFromHash() {
+  const h = (location.hash || '').replace(/^#/, '');
+  return ['overview', 'habits', 'transactions'].includes(h) ? h : null;
+}
+
+function showTab(name, opts = {}) {
   activeTab = name;
   // Close the Habits page-header chip dropdown on any tab change so leaving
   // Habits with the panel open doesn't leave it visible elsewhere.
@@ -217,20 +223,30 @@ function showTab(name) {
   }
   const tabLabel = name.charAt(0).toUpperCase() + name.slice(1);
   document.title = `MoneyHabits — ${tabLabel}`;
+  // Mobile sticky bar shows just the tab name.
+  const stickyTitle = document.getElementById('sticky-title');
+  if (stickyTitle) stickyTitle.textContent = tabLabel;
+
   ['overview', 'habits', 'transactions'].forEach(t => {
     const sec = document.getElementById('section-' + t);
     if (sec) sec.classList.toggle('hidden', t !== name);
   });
-  document.querySelectorAll('.tab-btn').forEach(btn => {
+  // Active state on every nav button (side rail + bottom tab bar).
+  document.querySelectorAll('[data-tab]').forEach(btn => {
     const active = btn.dataset.tab === name;
-    btn.classList.toggle('bg-neutral-100', active);
-    btn.classList.toggle('text-neutral-900', active);
-    btn.classList.toggle('font-semibold', active);
-    btn.classList.toggle('text-neutral-600', !active);
-    btn.classList.toggle('hover:bg-neutral-50', !active);
-    btn.setAttribute('aria-selected', active ? 'true' : 'false');
-    btn.setAttribute('tabindex', active ? '0' : '-1');
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-current', active ? 'page' : 'false');
   });
+
+  // Start the new tab at the top so the large title reads fresh.
+  const scroller = document.getElementById('app-scroll');
+  if (scroller) scroller.scrollTop = 0;
+
+  // Keep the URL hash in sync (drives back/forward via popstate below).
+  if (opts.updateHash !== false && tabFromHash() !== name) {
+    history.pushState({ tab: name }, '', '#' + name);
+  }
+
   if (name === 'overview')     initOverviewTab();
   if (name === 'habits' && !habitsInited) {
     habitsInited = true;
@@ -239,33 +255,40 @@ function showTab(name) {
   if (name === 'transactions') renderTransactionsTab();
 }
 
-document.querySelectorAll('.tab-btn').forEach(btn => {
+// Large-title scroll-shrink is mobile-only (desktop nav lives in the side rail,
+// so the title is static there). Re-wire on breakpoint change.
+let _largeTitleCleanup = null;
+function syncHeaderScroll() {
+  const scroller   = document.getElementById('app-scroll');
+  const largeTitle = document.getElementById('large-title-block');
+  const stickyFade = document.getElementById('sticky-fade');
+  if (!scroller || !largeTitle || !stickyFade || !window.MoneyHabitsIOS) return;
+  if (_largeTitleCleanup) { _largeTitleCleanup(); _largeTitleCleanup = null; }
+  if (window.innerWidth < 768) {
+    _largeTitleCleanup = MoneyHabitsIOS.initLargeTitleScroll(scroller, { largeTitle, stickyBar: stickyFade });
+  } else {
+    // Desktop: clear any inline styles a prior mobile session left behind.
+    largeTitle.style.opacity = '';
+    largeTitle.style.transform = '';
+    stickyFade.style.opacity = '';
+    stickyFade.style.pointerEvents = '';
+  }
+}
+
+// Nav buttons (side rail + bottom tab bar) → switch tab.
+document.querySelectorAll('[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => showTab(btn.dataset.tab));
 });
 
-document.getElementById('brand-home-btn')?.addEventListener('click', () => showTab('overview'));
-
-// Tablist keyboard nav (manual activation: arrows move focus, Enter/Space activates).
-// Per WAI-ARIA Authoring Practices: ←/→ cycle focus among tabs, Home/End jump to ends.
-document.getElementById('tab-nav')?.addEventListener('keydown', e => {
-  const tabs = Array.from(document.querySelectorAll('#tab-nav .tab-btn'));
-  const idx  = tabs.indexOf(document.activeElement);
-  if (idx < 0) return;
-  let next = -1;
-  if (e.key === 'ArrowRight')      next = (idx + 1) % tabs.length;
-  else if (e.key === 'ArrowLeft')  next = (idx - 1 + tabs.length) % tabs.length;
-  else if (e.key === 'Home')       next = 0;
-  else if (e.key === 'End')        next = tabs.length - 1;
-  else if (e.key === 'Enter' || e.key === ' ') {
-    e.preventDefault();
-    showTab(tabs[idx].dataset.tab);
-    return;
-  }
-  if (next >= 0) {
-    e.preventDefault();
-    tabs[next].focus();
-  }
+// Back / forward → restore the tab without pushing a fresh history entry.
+window.addEventListener('popstate', e => {
+  const t = (e.state && e.state.tab) || tabFromHash() || 'overview';
+  showTab(t, { updateHash: false });
 });
+
+// Wire the large-title scroll-shrink to the current breakpoint, re-wiring on change.
+syncHeaderScroll();
+window.matchMedia('(min-width: 768px)').addEventListener('change', syncHeaderScroll);
 
 
 // ── Dropdown a11y helper ─────────────────────────────────────────────────────
@@ -333,56 +356,94 @@ function wireDropdown(btn, panel, opts = {}) {
 }
 
 
-// ── Dataset switcher (header) ────────────────────────────────────────────────
-async function initDatasetSwitcher() {
-  const btn   = document.getElementById('dataset-switcher-btn');
-  const panel = document.getElementById('dataset-switcher-panel');
-  const label = document.getElementById('dataset-switcher-label');
-  if (!btn || !panel || !label) return;
+// ── Profile / dataset switcher ───────────────────────────────────────────────
+// A Notion-style workspace switcher: the desktop rail's #profile-btn shows the
+// active persona (badge + name + chevron); the mobile sticky header shows a
+// compact initial badge (#profile-badge-mobile). Both open the shared
+// #profile-panel dropdown (positioned near the trigger), listing the personas.
+// Switching POSTs the new key and reloads (in-place re-render is a later task).
+// Settings proper (About, etc.) is deferred.
+const _profileInitial = (key) => (key || '?').charAt(0).toUpperCase();
 
-  const datasets = await fetch('/api/datasets').then(r => r.json());
-  const active = datasets.find(d => d.active) || datasets[0];
-  if (!active) return;
-  label.textContent = active.label;
-
-  panel.innerHTML = datasets.map(d => `
-    <button type="button" data-key="${d.key}"
-      class="w-full text-left text-sm px-3 py-2 hover:bg-neutral-50 flex items-center justify-between
-             ${d.active ? 'text-neutral-900 font-semibold' : 'text-neutral-700'}">
-      <span>${d.label}</span>
-      ${d.active ? '<span class="text-neutral-700">●</span>' : ''}
-    </button>
-  `).join('');
-
-  wireDropdown(btn, panel);
-  btn.addEventListener('click', e => {
-    e.stopPropagation();
-    panel.classList.toggle('hidden');
-  });
-
-  panel.querySelectorAll('button[data-key]').forEach(item => {
-    item.addEventListener('click', async () => {
-      const key = item.dataset.key;
-      if (key === active.key) { panel.classList.add('hidden'); return; }
-      const res = await fetch('/api/datasets/active', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key }),
-      });
-      if (res.ok) window.location.reload();
-    });
-  });
-
-  document.addEventListener('click', e => {
-    if (!btn.contains(e.target) && !panel.contains(e.target)) {
-      panel.classList.add('hidden');
-    }
-  });
+function positionProfilePanel(anchor) {
+  const panel = document.getElementById('profile-panel');
+  if (!panel || !anchor) return;
+  panel.classList.remove('hidden');
+  const r = anchor.getBoundingClientRect();
+  const pw = panel.offsetWidth;
+  // Default left-aligned under the trigger; flip to right-aligned if it would
+  // overflow the viewport (the mobile badge sits at the top-right).
+  let left = r.left;
+  if (left + pw > window.innerWidth - 8) left = Math.max(8, r.right - pw);
+  panel.style.left = left + 'px';
+  panel.style.top  = (r.bottom + 6) + 'px';
+}
+function closeProfileMenu() {
+  const panel = document.getElementById('profile-panel');
+  if (panel) panel.classList.add('hidden');
+  document.getElementById('profile-btn')?.setAttribute('aria-expanded', 'false');
+  document.getElementById('profile-badge-mobile')?.setAttribute('aria-expanded', 'false');
+}
+function toggleProfileMenu(anchor) {
+  const panel = document.getElementById('profile-panel');
+  if (!panel) return;
+  if (panel.classList.contains('hidden')) {
+    positionProfilePanel(anchor);
+    anchor?.setAttribute('aria-expanded', 'true');
+  } else {
+    closeProfileMenu();
+  }
 }
 
-// __CHART_PLAYGROUND__ is set by tests/charts-playground.html, which loads this
-// file only for its chart render functions — skip the live-app boot there.
-if (!window.__CHART_PLAYGROUND__) initDatasetSwitcher();
+async function initProfileSwitcher() {
+  let datasets = [];
+  try { datasets = await fetch('/api/datasets').then(r => r.json()); } catch (e) { /* offline */ }
+  const active = datasets.find(d => d.active) || datasets[0];
+
+  // Fill the triggers with the active persona.
+  if (active) {
+    const nameEl  = document.getElementById('profile-name');
+    const badgeEl = document.getElementById('profile-badge');
+    const mBadge  = document.getElementById('profile-badge-mobile')?.querySelector('span');
+    if (nameEl)  nameEl.textContent  = active.label;
+    if (badgeEl) badgeEl.textContent = _profileInitial(active.key);
+    if (mBadge)  mBadge.textContent  = _profileInitial(active.key);
+  }
+
+  // Build the dropdown list.
+  const panel = document.getElementById('profile-panel');
+  if (panel) {
+    panel.innerHTML = `<p class="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-neutral-400">Dataset</p>`
+      + datasets.map(d => `
+        <button type="button" data-key="${d.key}" class="flex items-center gap-2.5 w-full px-3 py-2 text-left hover:bg-neutral-50 focus:outline-none focus:bg-neutral-50">
+          <span class="w-6 h-6 rounded-md bg-neutral-100 text-neutral-600 text-xs font-semibold flex items-center justify-center shrink-0" aria-hidden="true">${_profileInitial(d.key)}</span>
+          <span class="flex-1 min-w-0 text-sm truncate ${d.active ? 'font-semibold text-neutral-900' : 'text-neutral-700'}">${escHtml(d.label)}</span>
+          ${d.active ? '<span class="text-accent-700 shrink-0" aria-label="active">✓</span>' : ''}
+        </button>`).join('');
+
+    panel.querySelectorAll('button[data-key]').forEach(item => {
+      item.addEventListener('click', async () => {
+        const key = item.dataset.key;
+        if (active && key === active.key) { closeProfileMenu(); return; }
+        const res = await fetch('/api/datasets/active', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        if (res.ok) window.location.reload();
+      });
+    });
+  }
+
+  // Wire the triggers + dismissal (outside-click / Escape).
+  document.getElementById('profile-btn')?.addEventListener('click', e => { e.stopPropagation(); toggleProfileMenu(e.currentTarget); });
+  document.getElementById('profile-badge-mobile')?.addEventListener('click', e => { e.stopPropagation(); toggleProfileMenu(e.currentTarget); });
+  document.addEventListener('click', e => {
+    const p = document.getElementById('profile-panel');
+    if (p && !p.classList.contains('hidden') && !p.contains(e.target)) closeProfileMenu();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeProfileMenu(); });
+}
 
 
 // ── Overview tab ─────────────────────────────────────────────────────────────
@@ -3459,4 +3520,10 @@ function escHtml(str) {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 // The chart playground skips the live-app boot — it drives render functions
 // directly against static persona JSON.
-if (!window.__CHART_PLAYGROUND__) showTab('overview');
+if (!window.__CHART_PLAYGROUND__) {
+  // Open the tab named in the URL hash (deep-link / refresh), else Overview.
+  const initialTab = tabFromHash() || 'overview';
+  history.replaceState({ tab: initialTab }, '', '#' + initialTab);
+  showTab(initialTab, { updateHash: false });
+  initProfileSwitcher();
+}
