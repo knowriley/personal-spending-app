@@ -3195,8 +3195,9 @@ function renderDdTable(data, compareData) {
 
 // ── Transactions ──────────────────────────────────────────────────────────────
 let txnInited = false;
-let txnPage = 1;
-let txnDayRange = null;  // { start_day, end_day } when navigated from Overview
+let _allTransactions = null;          // load-once cache (newest-first)
+let txnVisibleMonths = 3;             // month-groups shown; "Load older" increments
+let txnDayRange = null;               // { start_day, end_day } from an Overview linkout
 
 function transactionsSubtitle() {
   const cat    = document.getElementById('txn-cat-filter')?.value || '';
@@ -3224,7 +3225,6 @@ function renderTransactionsHeader() {
 async function renderTransactionsTab() {
   if (!txnInited) {
     const cats = await fetch('/api/categories/list').then(r => r.json());
-
     const catSel = document.getElementById('txn-cat-filter');
     cats.forEach(c => {
       const opt = document.createElement('option');
@@ -3232,83 +3232,212 @@ async function renderTransactionsTab() {
       catSel.appendChild(opt);
     });
 
-    const mSel = document.getElementById('txn-month-filter');
-
+    // A manual filter change resets the view to 3 months and clears any
+    // day-range carried in from an Overview linkout.
     const onFilterChange = () => {
-      txnPage = 1;
+      txnVisibleMonths = 3;
       txnDayRange = null;
+      updateTxnFilterBadge();
       renderTransactionsHeader();
-      loadTransactions();
+      renderTransactions();
     };
-
-    document.getElementById('txn-search').addEventListener('input', debounce(onFilterChange, 300));
+    document.getElementById('txn-search').addEventListener('input', debounce(onFilterChange, 100));
     catSel.addEventListener('change', onFilterChange);
-    mSel.addEventListener('change',   onFilterChange);
-    document.getElementById('txn-prev').addEventListener('click', () => { txnPage--; loadTransactions(); });
-    document.getElementById('txn-next').addEventListener('click', () => { txnPage++; loadTransactions(); });
+    document.getElementById('txn-month-filter').addEventListener('change', onFilterChange);
+    document.getElementById('txn-filter-btn').addEventListener('click', openTxnFilterSheet);
 
     txnInited = true;
   }
 
-  // Apply nav state from Overview-tab linkouts
+  // Apply nav state from Overview-tab linkouts (client-side filters now).
   const nav = window.moneyHabitsNav;
   if (nav && nav.tab === 'transactions') {
-    document.getElementById('txn-search').value      = '';
-    document.getElementById('txn-cat-filter').value  = '';
+    document.getElementById('txn-search').value       = '';
+    document.getElementById('txn-cat-filter').value   = '';
     document.getElementById('txn-month-filter').value = nav.year_month || '';
-    txnPage = 1;
+    txnVisibleMonths = 3;
     txnDayRange = (nav.start_day != null && nav.end_day != null)
       ? { start_day: nav.start_day, end_day: nav.end_day }
       : null;
     window.moneyHabitsNav = null;
   }
 
-  renderTransactionsHeader();
-  loadTransactions();
-}
-
-async function loadTransactions() {
-  const search    = document.getElementById('txn-search').value;
-  const category  = document.getElementById('txn-cat-filter').value;
-  const yearMonth = document.getElementById('txn-month-filter').value;
-
-  const params = new URLSearchParams({ search, category, year_month: yearMonth, page: txnPage });
-  if (txnDayRange) {
-    params.set('start_day', txnDayRange.start_day);
-    params.set('end_day',   txnDayRange.end_day);
+  // Load the whole list once (chips also need the category→parent map).
+  if (!_allTransactions) {
+    await loadCategoryMeta();
+    const data = await fetch('/api/transactions/all').then(r => r.json());
+    _allTransactions = data.rows || [];
   }
 
-  // Need category→parent map before painting chips, otherwise all
-  // children fall back to the default-gray slug.
-  await loadCategoryMeta();
-  const data = await fetch('/api/transactions?' + params).then(r => r.json());
+  updateTxnFilterBadge();
+  renderTransactionsHeader();
+  renderTransactions();
+}
 
-  const tbody = document.getElementById('txn-tbody');
-  tbody.innerHTML = '';
-
-  data.rows.forEach(row => {
-    const tr = document.createElement('tr');
-    tr.className = 'hover:bg-neutral-50 transition-colors';
-    tr.innerHTML = `
-      <td class="px-4 py-3 text-neutral-500 whitespace-nowrap">${formatTxnDate(row.date)}</td>
-      <td class="px-4 py-3 font-medium text-neutral-800 max-w-xs truncate">${escHtml(row.name)}</td>
-      <td class="px-4 py-3 text-neutral-500 hidden sm:table-cell">
-        <span class="inline-block text-sm px-2.5 py-1 rounded-full" style="${catChipStyle(row.category)}">${catLabelHtml(row.category)}</span>
-      </td>
-      <td class="px-4 py-3 text-neutral-500 hidden md:table-cell text-xs">${escHtml(row.account)}</td>
-      <td class="px-4 py-3 text-right font-medium text-neutral-800 whitespace-nowrap">${fmt(row.amount)}</td>
-    `;
-    tbody.appendChild(tr);
+// Client-side filter over the cached list (search ∧ category ∧ month ∧ day-range).
+function getFilteredTransactions() {
+  const search = (document.getElementById('txn-search')?.value || '').trim().toLowerCase();
+  const cat    = document.getElementById('txn-cat-filter')?.value || '';
+  const month  = document.getElementById('txn-month-filter')?.value || '';
+  let rows = _allTransactions || [];
+  if (search) rows = rows.filter(t => (t.name || '').toLowerCase().includes(search));
+  if (cat)    rows = rows.filter(t => t.category === cat);
+  if (month)  rows = rows.filter(t => t.date.slice(0, 7) === month);
+  if (txnDayRange) rows = rows.filter(t => {
+    const d = parseInt(t.date.slice(8, 10), 10);
+    return d >= txnDayRange.start_day && d <= txnDayRange.end_day;
   });
+  return rows;
+}
 
-  const totalPages = Math.ceil(data.total / data.per_page);
-  const start = (txnPage - 1) * data.per_page + 1;
-  const end   = Math.min(txnPage * data.per_page, data.total);
-  document.getElementById('txn-count').textContent =
-    data.total > 0 ? `${start}–${end} of ${data.total.toLocaleString()} transactions` : 'No transactions found';
+// Group newest-first rows into [{ ym, rows }] ordered newest-month-first.
+function groupByMonth(rows) {
+  const groups = new Map();
+  rows.forEach(t => {
+    const ym = t.date.slice(0, 7);
+    (groups.get(ym) || groups.set(ym, []).get(ym)).push(t);
+  });
+  return [...groups.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([ym, r]) => ({ ym, rows: r }));
+}
 
-  document.getElementById('txn-prev').disabled = txnPage <= 1;
-  document.getElementById('txn-next').disabled = txnPage >= totalPages;
+function renderTransactions() {
+  const list = document.getElementById('txn-list');
+  const olderWrap = document.getElementById('txn-load-older-wrap');
+  if (!list) return;
+
+  const search = (document.getElementById('txn-search')?.value || '').trim();
+  const groups = groupByMonth(getFilteredTransactions());
+
+  if (!groups.length) {
+    list.innerHTML = `<p class="text-sm text-neutral-500 py-12 text-center">No transactions found.</p>`;
+    if (olderWrap) olderWrap.innerHTML = '';
+    return;
+  }
+
+  list.innerHTML = groups.slice(0, txnVisibleMonths)
+    .map(g => monthGroupHTML(g, search)).join('');
+
+  // "Load older" → next month-group with matches (empty months are skipped
+  // because groupByMonth only emits months that have rows).
+  if (olderWrap) {
+    olderWrap.innerHTML = '';
+    if (groups.length > txnVisibleMonths) {
+      const next = groups[txnVisibleMonths];
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'px-6 py-3 rounded-lg border border-neutral-200 bg-white text-sm font-medium text-neutral-700 hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-accent-700';
+      btn.textContent = `Load ${formatMonthLabel(next.ym)} →`;
+      btn.addEventListener('click', () => { txnVisibleMonths++; renderTransactions(); });
+      olderWrap.appendChild(btn);
+    }
+  }
+}
+
+function monthGroupHTML({ ym, rows }, search) {
+  const n = rows.length;
+  const count = search
+    ? `${n} transaction${n !== 1 ? 's' : ''} matching "${escHtml(search)}"`
+    : `${n} transaction${n !== 1 ? 's' : ''}`;
+  return `
+    <div class="mb-8">
+      <h3 class="text-base font-semibold text-neutral-600 px-1 pt-2 pb-3">
+        ${escHtml(formatMonthLabel(ym))} <span class="text-neutral-400 font-normal">· ${count}</span>
+      </h3>
+      <div class="bg-white rounded-lg border border-neutral-200 overflow-hidden divide-y divide-neutral-100">
+        ${rows.map(txnRowHTML).join('')}
+      </div>
+    </div>`;
+}
+
+// One row, two layouts: stacked (<768px) and table-grid (≥768px).
+function txnRowHTML(t) {
+  const chip = `<span class="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full max-w-full truncate" style="${catChipStyle(t.category)}">${catLabelHtml(t.category)}</span>`;
+  return `
+    <div class="px-4 py-3 hover:bg-neutral-50 transition-colors">
+      <!-- Mobile: name + amount, then chip + date -->
+      <div class="md:hidden">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-base font-medium text-neutral-900 truncate">${escHtml(t.name)}</span>
+          <span class="text-base font-semibold tabular-nums text-neutral-900 shrink-0">${fmt(t.amount)}</span>
+        </div>
+        <div class="flex items-center justify-between gap-3 mt-1.5">
+          ${chip}
+          <span class="text-xs text-neutral-500 shrink-0">${formatTxnDate(t.date)}</span>
+        </div>
+      </div>
+      <!-- Desktop: Date | Merchant | Category | Account | Amount -->
+      <div class="hidden md:grid md:grid-cols-[7rem_minmax(0,1fr)_12rem_10rem_6rem] md:items-center md:gap-4">
+        <span class="text-sm text-neutral-500 whitespace-nowrap">${formatTxnDate(t.date)}</span>
+        <span class="text-sm font-medium text-neutral-800 truncate">${escHtml(t.name)}</span>
+        <span class="min-w-0">${chip}</span>
+        <span class="text-xs text-neutral-500 truncate">${escHtml(t.account || '')}</span>
+        <span class="text-sm font-medium text-neutral-800 text-right tabular-nums whitespace-nowrap">${fmt(t.amount)}</span>
+      </div>
+    </div>`;
+}
+
+// Count of active sheet filters (category + month; search is always visible).
+function txnActiveFilterCount() {
+  let n = 0;
+  if (document.getElementById('txn-cat-filter')?.value)   n++;
+  if (document.getElementById('txn-month-filter')?.value) n++;
+  return n;
+}
+function updateTxnFilterBadge() {
+  const badge = document.getElementById('txn-filter-badge');
+  if (!badge) return;
+  const n = txnActiveFilterCount();
+  badge.textContent = String(n);
+  badge.classList.toggle('hidden', n === 0);
+}
+
+// Mobile: re-parent the category + month controls into a bottom sheet (changes
+// apply live); a Clear-all resets everything. Controls move back on dismiss.
+function openTxnFilterSheet() {
+  if (!window.MoneyHabitsIOS) return;
+  const controls = document.getElementById('txn-filter-controls');
+  if (!controls) return;
+  const home   = controls.parentElement;        // restore here on dismiss
+  const anchor = controls.nextElementSibling;    // (before the Filter button)
+
+  controls.classList.remove('hidden', 'md:flex', 'md:items-center', 'md:gap-3');
+  controls.classList.add('flex', 'flex-col', 'gap-4');
+  controls.querySelectorAll('select, input').forEach(el => el.classList.add('w-full'));
+
+  const wrap = document.createElement('div');
+  wrap.className = 'px-4 pb-4 flex flex-col gap-4';
+  wrap.appendChild(controls);
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'text-sm text-neutral-600 underline self-start';
+  clear.textContent = 'Clear all';
+  clear.addEventListener('click', () => {
+    document.getElementById('txn-search').value = '';
+    document.getElementById('txn-cat-filter').value = '';
+    document.getElementById('txn-month-filter').value = '';
+    txnDayRange = null;
+    txnVisibleMonths = 3;
+    updateTxnFilterBadge();
+    renderTransactionsHeader();
+    renderTransactions();
+    MoneyHabitsIOS.closeBottomSheet();
+  });
+  wrap.appendChild(clear);
+
+  MoneyHabitsIOS.openBottomSheet({
+    title: 'Filter Transactions',
+    content: wrap,
+    onDismiss: () => {
+      // Restore the controls to their inline home + classes.
+      controls.classList.remove('flex', 'flex-col', 'gap-4');
+      controls.classList.add('hidden', 'md:flex', 'md:items-center', 'md:gap-3');
+      controls.querySelectorAll('select, input').forEach(el => el.classList.remove('w-full'));
+      if (home) home.insertBefore(controls, anchor);
+      updateTxnFilterBadge();
+    },
+  });
 }
 
 // ── Month / day label constants ──────────────────────────────────────────────

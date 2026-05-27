@@ -66,6 +66,13 @@ def api_transactions():
     return jsonify(result)
 
 
+@app.route("/api/transactions/all")
+def api_transactions_all():
+    # v2: the whole transaction list once, so the frontend filters client-side
+    # (mirrors what the static build ships as transactions.json).
+    return jsonify({"rows": dp.transactions_all()})
+
+
 @app.route("/api/radial")
 def api_radial():
     category = request.args.get("category", "")
