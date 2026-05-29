@@ -43,26 +43,30 @@ Source of truth: `tailwind.config.js` for the `accent` ramp; Tailwind defaults f
 
 **Don't**: introduce ad-hoc hex codes anywhere — JS, HTML, or CSS. If you need a new color in JS, add it as a CSS custom property in `style.css :root` first.
 
-### 1.2 Typography scale
+### 1.2 Typography scale (v2 — unified mobile + desktop)
 
-The scale is intentionally narrow. Don't introduce new sizes ad-hoc.
+The scale is intentionally narrow. Don't introduce new sizes ad-hoc. **Same scale at every viewport** — the large-title pattern (§3 of `docs/PRD-v2-mobile-design.md`) handles the "huge title on phone" feeling, so the underlying tokens stay consistent.
 
 | Use | Class | Px |
 |---|---|---|
-| Page title (`<h1>`) | `text-3xl font-semibold tracking-tight text-gray-900` | 30 |
-| Page subtitle / context | `text-sm text-gray-600` | 14 |
-| Card value (primary number) | `text-6xl font-semibold tracking-tight text-gray-900` | 60 |
-| Card value placeholder (`—`) | `text-6xl font-semibold tracking-tight text-gray-500 cursor-help` | 60 |
-| Card label | `text-base font-semibold text-gray-900` | 16 |
-| Card body list row | `text-base font-medium text-gray-900` | 16 |
-| Card context line (e.g. smart message) | `text-sm text-gray-600` | 14 |
-| KPI eyebrow | `text-base font-semibold text-gray-500` | 16 |
-| KPI value | `text-5xl font-semibold tracking-tight text-gray-900 tabular-nums` | 48 |
-| Link button label | `text-sm font-medium text-gray-600` | 14 |
-| Tooltip / fine-print fallback | `text-xs text-gray-600` | 12 |
-| Empty-state body | `text-sm text-gray-500` | 14 |
+| **Large-title (initial state)** — `#page-title` | `text-4xl font-bold tracking-tight text-neutral-900` | 36 |
+| **Sticky title (mobile, on scroll)** — `#sticky-title` | `text-2xl font-semibold tracking-tight text-neutral-900` | 24 |
+| Eyebrow above the large title | `text-base font-semibold text-neutral-600` | 16 |
+| Card value (primary number) | `text-6xl font-semibold tracking-tight text-neutral-900 tabular-nums` | 60 |
+| Card value placeholder (`—`) | `text-6xl font-semibold tracking-tight text-neutral-500 cursor-help` | 60 |
+| Card label | `text-base font-semibold text-neutral-900` | 16 |
+| Card body list row | `text-base font-medium text-neutral-900` | 16 |
+| Card context line (e.g. smart message) | `text-sm font-medium` + direction color | 14 |
+| Chart card heading | `text-base font-semibold text-neutral-900` | 16 |
+| Month group header (Transactions) | `text-base font-semibold text-neutral-600` | 16 |
+| Body / row default | `text-sm` | 14 |
+| Link button label | `text-sm font-medium text-neutral-600` | 14 |
+| Tooltip body / fine print | `text-xs text-neutral-500` | 12 |
+| Empty-state body | `text-sm text-neutral-500` | 14 |
 
 Always pair `font-semibold` with `tracking-tight` for large numerals — Inter at large sizes looks loose without it.
+
+> **v2 note** — v1's `text-3xl` `<h1>` is replaced by the **large-title pattern**: a 36pt title in the content area that shrinks (opacity + scale) into a 24pt sticky title at the top of the viewport over 60pt of scroll on mobile. Desktop shows the large title statically (the side rail is the persistent chrome). Wired via `MoneyHabitsIOS.initLargeTitleScroll(scrollContainer, { largeTitle, stickyBar })` in `static/js/ios.js` (mobile only — `syncHeaderScroll()` in `app.js` re-wires on the 768px breakpoint).
 
 ### 1.3 Spacing
 

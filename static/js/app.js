@@ -3687,6 +3687,114 @@ async function _refreshProfilePanel() {
   });
 }
 
+// ── Install banner (PWA A2HS) ─────────────────────────────────────────────────
+// Surfaces on visit 2+ for users who haven't installed yet. iOS Safari can't
+// trigger A2HS programmatically, so it gets a hint card pointing at Share →
+// Add to Home Screen. Android Chrome fires `beforeinstallprompt` — we capture
+// the event and surface a native Install button. Dismiss persists in
+// localStorage so a stuck-with-the-X banner doesn't follow them forever.
+const VISIT_COUNT_KEY       = 'mh-visit-count';
+const INSTALL_DISMISSED_KEY = 'mh-install-dismissed';
+let _deferredInstallPrompt = null;
+
+function _isStandalone() {
+  return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+         window.navigator.standalone === true;
+}
+function _isIOSSafari() {
+  const ua = navigator.userAgent || '';
+  // iPadOS reports as Mac; treat any touch-capable Safari-ish UA as iOS too.
+  const isIOSDevice = /iPad|iPhone|iPod/.test(ua) || (ua.includes('Macintosh') && 'ontouchend' in document);
+  return isIOSDevice && /Safari/.test(ua) && !/(CriOS|FxiOS|EdgiOS)/.test(ua);
+}
+function _installDismissed() {
+  try { return localStorage.getItem(INSTALL_DISMISSED_KEY) === 'true'; } catch (e) { return false; }
+}
+function _bumpVisitCount() {
+  try {
+    const n = parseInt(localStorage.getItem(VISIT_COUNT_KEY) || '0', 10) + 1;
+    localStorage.setItem(VISIT_COUNT_KEY, String(n));
+    return n;
+  } catch (e) { return 1; }
+}
+function dismissInstallBanner() {
+  try { localStorage.setItem(INSTALL_DISMISSED_KEY, 'true'); } catch (e) {}
+  document.getElementById('install-banner')?.remove();
+}
+
+// Pre-bind: Android Chrome fires beforeinstallprompt at any time, often before
+// we evaluate the show-banner conditions. Capture it so we can call prompt()
+// from the banner button later.
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  maybeShowInstallBanner();
+});
+
+function maybeShowInstallBanner() {
+  if (window.__CHART_PLAYGROUND__) return;
+  if (_isStandalone() || _installDismissed()) return;
+  const visits = parseInt(localStorage.getItem(VISIT_COUNT_KEY) || '0', 10);
+  if (visits < 2) return;                              // wait for the 2nd visit
+  if (document.getElementById('install-banner')) return;
+
+  if (_isIOSSafari())              _renderInstallBannerIOS();
+  else if (_deferredInstallPrompt) _renderInstallBannerAndroid();
+  // (Other browsers don't expose an install path — silently skip.)
+}
+
+function _buildInstallBannerShell() {
+  const el = document.createElement('div');
+  el.id = 'install-banner';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', 'Install MoneyHabits');
+  el.className = 'fixed left-4 right-4 md:left-auto md:right-6 md:max-w-sm bg-white border border-neutral-200 rounded-xl shadow-lg p-3 z-40';
+  // Clear the mobile bottom tab bar (~64pt + safe area). On desktop the rail
+  // is on the side, so a flat bottom margin works.
+  el.style.bottom = 'calc(env(safe-area-inset-bottom) + 72px)';
+  document.body.appendChild(el);
+  return el;
+}
+const _INSTALL_X_SVG = '<svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg>';
+// iOS Share glyph — box with an arrow popping up out of it.
+const _IOS_SHARE_SVG = '<svg class="inline-block w-3.5 h-3.5 align-text-bottom mx-0.5 text-accent-700" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5h1.5A1.5 1.5 0 0 1 14 6.5v6A1.5 1.5 0 0 1 12.5 14h-9A1.5 1.5 0 0 1 2 12.5v-6A1.5 1.5 0 0 1 3.5 5H5"/><path d="M8 2v8"/><path d="M5.5 4.5L8 2l2.5 2.5"/></svg>';
+
+function _renderInstallBannerIOS() {
+  const el = _buildInstallBannerShell();
+  el.innerHTML = `
+    <div class="flex items-start gap-3">
+      <img src="/static/icons/icon-180.png" alt="" class="w-10 h-10 rounded-lg shrink-0" />
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-semibold text-neutral-900">Install MoneyHabits</p>
+        <p class="text-xs text-neutral-500 mt-0.5">Tap${_IOS_SHARE_SVG}then <strong class="text-neutral-700">Add to Home Screen</strong>.</p>
+      </div>
+      <button type="button" aria-label="Dismiss install prompt" class="-mr-1 -mt-1 p-2 text-neutral-400 hover:text-neutral-600 shrink-0" data-install-dismiss>${_INSTALL_X_SVG}</button>
+    </div>`;
+  el.querySelector('[data-install-dismiss]')?.addEventListener('click', dismissInstallBanner);
+}
+
+function _renderInstallBannerAndroid() {
+  const el = _buildInstallBannerShell();
+  el.innerHTML = `
+    <div class="flex items-center gap-3">
+      <img src="/static/icons/icon-180.png" alt="" class="w-10 h-10 rounded-lg shrink-0" />
+      <div class="flex-1 min-w-0">
+        <p class="text-sm font-semibold text-neutral-900">Install MoneyHabits</p>
+        <p class="text-xs text-neutral-500 mt-0.5">Add it to your home screen for offline access.</p>
+      </div>
+      <button type="button" class="px-3 py-1.5 rounded-lg bg-accent-700 text-white text-xs font-semibold hover:bg-accent-800 focus:outline-none focus:ring-2 focus:ring-accent-700 shrink-0" data-install-prompt>Install</button>
+      <button type="button" aria-label="Dismiss install prompt" class="-mr-1 -mt-1 p-2 text-neutral-400 hover:text-neutral-600 shrink-0" data-install-dismiss>${_INSTALL_X_SVG}</button>
+    </div>`;
+  el.querySelector('[data-install-prompt]')?.addEventListener('click', async () => {
+    if (!_deferredInstallPrompt) return;
+    _deferredInstallPrompt.prompt();
+    const { outcome } = await _deferredInstallPrompt.userChoice;
+    _deferredInstallPrompt = null;
+    if (outcome === 'accepted') dismissInstallBanner();
+  });
+  el.querySelector('[data-install-dismiss]')?.addEventListener('click', dismissInstallBanner);
+}
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 // The chart playground skips the live-app boot — it drives render functions
 // directly against static persona JSON.
@@ -3696,4 +3804,6 @@ if (!window.__CHART_PLAYGROUND__) {
   history.replaceState({ tab: initialTab }, '', '#' + initialTab);
   showTab(initialTab, { updateHash: false });
   initProfileSwitcher();
+  _bumpVisitCount();
+  maybeShowInstallBanner();
 }
