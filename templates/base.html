@@ -170,5 +170,28 @@
   <div id="cjs-tip" class="hidden fixed pointer-events-none z-50"></div>
 
   {% block scripts %}{% endblock %}
+
+  <!-- Service-worker registration — owned by the real app shell so the PWA's
+       SW lifecycle tracks deploys. When skipWaiting() in the new SW makes it
+       take control mid-session, controllerchange fires and we reload once
+       (guarded) to swap in the fresh shell. -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      // Truthy only when this page is already SW-controlled at load (i.e. a
+      // prior build is on screen). On a first-ever install it's null, so we
+      // skip the reload — the page was just served fresh from the network.
+      const _hadController = !!navigator.serviceWorker.controller;
+      let _swReloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (_swReloaded || !_hadController) return;
+        _swReloaded = true;
+        window.location.reload();
+      });
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .catch(err => console.error('SW registration failed:', err));
+      });
+    }
+  </script>
 </body>
 </html>

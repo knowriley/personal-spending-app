@@ -19,6 +19,12 @@ const DATA_CACHE  = `moneyhabits-data-${BUILD_HASH}`;
 const SHELL_URLS = __SHELL_URLS__;
 
 self.addEventListener('install', event => {
+  // Activate this build immediately instead of waiting for every old client
+  // to close. Without this, a new SW sits in "waiting" behind the previous
+  // one indefinitely on an installed PWA (the home-screen app is never fully
+  // closed), so deploys never reach the device. Paired with clients.claim()
+  // in activate, the new build takes over on the next launch.
+  self.skipWaiting();
   event.waitUntil(
     caches.open(SHELL_CACHE).then(cache => cache.addAll(SHELL_URLS))
   );
