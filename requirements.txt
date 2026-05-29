@@ -1,8 +1,9 @@
-flask>=3.0
-pandas>=2.0
-livereload>=2.6
-gunicorn>=21
+# v2 is a static build — these are the ONLY deps the build chain imports.
+# (No runtime server: flask/gunicorn/werkzeug/livereload were v1-only and were
+#  dropped in M14a. The v1 Flask app is archived at archive/app-flask-v1.py.)
+pandas>=2.0          # data_processor.py — CSV → JSON precompute
+jinja2>=3.0          # build_static.py — renders index.html (was pulled in via flask before)
 
-# v2 build-time only (build_assets.py)
-cairosvg>=2.7
-Pillow>=10.0
+# build-time asset rendering (build_assets.py)
+cairosvg>=2.7        # SVG icons → PNG
+Pillow>=10.0         # PNG resize / ICO
