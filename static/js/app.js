@@ -12,6 +12,70 @@ function fmt(n) {
   return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
+// ── Active persona + cached static-JSON fetch ────────────────────────────────
+// v2 ships a per-persona static JSON tree under /api/{persona}/. Active persona
+// is held in localStorage (per-device) — there is no server-side persona state.
+// fetchJsonCached() memoizes responses so re-renders + cross-tab lookups don't
+// re-fetch; a persona switch calls clearJsonCache() before re-rendering.
+const PERSONA_KEY = 'mh-active-persona';
+let _activePersona = null;
+function getActivePersona() {
+  if (_activePersona) return _activePersona;
+  let key = null;
+  try { key = localStorage.getItem(PERSONA_KEY); } catch (e) { /* private mode */ }
+  _activePersona = key || 'student';
+  return _activePersona;
+}
+function setActivePersona(key) {
+  _activePersona = key;
+  try { localStorage.setItem(PERSONA_KEY, key); } catch (e) { /* private mode */ }
+}
+
+const _jsonCache = new Map();
+function clearJsonCache() { _jsonCache.clear(); }
+function fetchJsonCached(file) {
+  const url = `/api/${getActivePersona()}/${file}`;
+  let p = _jsonCache.get(url);
+  if (p) return p;
+  p = fetch(url).then(r => r.json());
+  _jsonCache.set(url, p);
+  return p;
+}
+// Persona-agnostic fetch (used by the dataset list itself).
+function fetchPersonasJson() {
+  return fetch('/api/personas.json').then(r => r.json());
+}
+
+// Mirrors build_static.scope_slug — maps (level, category) → the file-name slug
+// the static tree uses (e.g. ('parent', 'Food & Drink') → 'parent-food-and-drink').
+function scopeSlug(level, category) {
+  if (level === 'all') return 'all';
+  const s = (category || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')   // strip combining marks
+    .toLowerCase().replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return `${level}-${s}`;
+}
+
+// Pick the static monthly file the Habits chart needs for (scope, view) — the
+// chart is always monthly. Stacked variants pull the by-parent (all) or
+// by-child (parent) shapes; everything else is the single-series scope file.
+function habitsMonthlyFile(level, category, view) {
+  if (level === 'all')    return view === 'stacked' ? 'monthly-all-month-by-parent.json' : 'monthly-all-month.json';
+  if (level === 'parent') return view === 'stacked' ? `monthly-${scopeSlug(level, category)}-month-by-child.json` : `monthly-${scopeSlug(level, category)}-month.json`;
+  return `monthly-${scopeSlug(level, category)}-month.json`;
+}
+
+// Filter a periods array (each row has `period` = "YYYY-MM") to the YYYY-MM-DD
+// start/end window. The static monthly files carry the full history; the
+// frontend slices to the active timeframe.
+function filterPeriodsByRange(periods, start, end) {
+  if (!start && !end) return periods;
+  const sM = start ? start.slice(0, 7) : '';
+  const eM = end   ? end.slice(0, 7)   : '';
+  return periods.filter(p => (!sM || p.period >= sM) && (!eM || p.period <= eM));
+}
+
 // ── Custom DOM tooltip ────────────────────────────────────────────────────
 // Drives a single #ct-tip element from mouse events. Now used only by the
 // hand-rolled SVG radial chart (renderHabitsRadial → showCustomTooltip); the
@@ -403,9 +467,12 @@ function toggleProfileMenu(anchor) {
 }
 
 async function initProfileSwitcher() {
+  // /api/personas.json is persona-agnostic — it's at the API root, not under
+  // a persona prefix. It lists [{key,label}]; "active" comes from localStorage.
   let datasets = [];
-  try { datasets = await fetch('/api/datasets').then(r => r.json()); } catch (e) { /* offline */ }
-  const active = datasets.find(d => d.active) || datasets[0];
+  try { datasets = await fetchPersonasJson(); } catch (e) { /* offline */ }
+  const activeKey = getActivePersona();
+  const active    = datasets.find(d => d.key === activeKey) || datasets[0];
 
   // Fill the triggers with the active persona.
   if (active) {
@@ -421,23 +488,23 @@ async function initProfileSwitcher() {
   const panel = document.getElementById('profile-panel');
   if (panel) {
     panel.innerHTML = `<p class="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-neutral-400">Dataset</p>`
-      + datasets.map(d => `
+      + datasets.map(d => {
+          const isActive = d.key === activeKey;
+          return `
         <button type="button" data-key="${d.key}" class="flex items-center gap-2.5 w-full px-3 py-2 text-left hover:bg-neutral-50 focus:outline-none focus:bg-neutral-50">
           <span class="w-6 h-6 rounded-md bg-neutral-100 text-neutral-600 text-xs font-semibold flex items-center justify-center shrink-0" aria-hidden="true">${_profileInitial(d.key)}</span>
-          <span class="flex-1 min-w-0 text-sm truncate ${d.active ? 'font-semibold text-neutral-900' : 'text-neutral-700'}">${escHtml(d.label)}</span>
-          ${d.active ? '<span class="text-accent-700 shrink-0" aria-label="active">✓</span>' : ''}
-        </button>`).join('');
+          <span class="flex-1 min-w-0 text-sm truncate ${isActive ? 'font-semibold text-neutral-900' : 'text-neutral-700'}">${escHtml(d.label)}</span>
+          ${isActive ? '<span class="text-accent-700 shrink-0" aria-label="active">✓</span>' : ''}
+        </button>`;
+        }).join('');
 
     panel.querySelectorAll('button[data-key]').forEach(item => {
       item.addEventListener('click', async () => {
         const key = item.dataset.key;
-        if (active && key === active.key) { closeProfileMenu(); return; }
-        const res = await fetch('/api/datasets/active', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key }),
-        });
-        if (res.ok) window.location.reload();
+        if (key === getActivePersona()) { closeProfileMenu(); return; }
+        setActivePersona(key);
+        closeProfileMenu();
+        await resetAndReload();
       });
     });
   }
@@ -502,7 +569,7 @@ async function initOverviewTab() {
 
   // Load the dataset's month list once for the header dropdown.
   try {
-    overviewMonths = await fetch('/api/months/list').then(r => r.json());
+    overviewMonths = await fetchJsonCached('months.json');
   } catch (e) { /* dropdown falls back to just the active month */ }
 
   await loadAndRenderOverview();
@@ -513,25 +580,30 @@ async function initOverviewTab() {
 async function loadAndRenderOverview(month) {
   let snap;
   try {
-    const sParams = new URLSearchParams();
-    if (month) sParams.set('month', month);
-    const snapUrl = '/api/overview/snapshot' + (sParams.toString() ? '?' + sParams : '');
-    [snap] = await Promise.all([
-      fetch(snapUrl).then(r => r.json()),
+    // Static tree: one file with all months keyed inside; pick the requested
+    // month (default = most recent, i.e. the first key by definition of the
+    // build's newest-first emission).
+    const [snapFile] = await Promise.all([
+      fetchJsonCached('overview-snapshot.json'),
       loadCategoryMeta(),
     ]);
+    const months = snapFile.months || {};
+    const target = (month && months[month]) ? month : Object.keys(months)[0];
+    snap = months[target];
+    if (!snap) throw new Error('overview snapshot empty');
   } catch (e) {
     console.error('Overview snapshot fetch failed', e);
     return;
   }
   overviewSnapshot = snap;
 
-  // Top categories for the active month, excluding default exclusions.
+  // Top categories for the active month, excluding default exclusions (default
+  // file already excludes 'Rent'; if our exclude list ever diverges we'd need
+  // a richer build, but it doesn't today).
   let topCats = [];
   try {
-    const params = new URLSearchParams({ year_month: snap.month });
-    if (OVERVIEW_DEFAULT_EXCLUDES.length) params.set('exclude', OVERVIEW_DEFAULT_EXCLUDES.join(','));
-    topCats = await fetch('/api/top-categories?' + params).then(r => r.json());
+    const tc = await fetchJsonCached('top-categories-default.json');
+    topCats = (tc.months && tc.months[snap.month]) || [];
   } catch (e) { /* swallow — render empty */ }
   topCats = (topCats || []).slice(0, 3);
 
@@ -1370,7 +1442,7 @@ function derivedShade(parentHex, idx, count) {
 
 async function initDashboard() {
   const [allMonths, _meta] = await Promise.all([
-    fetch('/api/months/list').then(r => r.json()),
+    fetchJsonCached('months.json'),
     loadCategoryMeta(),
   ]);
 
@@ -1522,12 +1594,8 @@ async function renderCategoryTree() {
   const list = document.getElementById('hc-cat-panel-list');
   if (!list) return;
   // The tree is a navigation device — its totals reflect the full active
-  // timeframe (e.g. YTD shows YTD totals), not just the focus month.
-  const params = new URLSearchParams();
-  const { start, end } = dateRangeFor(lensTimeframe);
-  if (start) params.set('start', start);
-  if (end)   params.set('end', end);
-  const data = await fetch('/api/category-hierarchy?' + params).then(r => r.json());
+  // timeframe. The build emits one hierarchy file per timeframe preset.
+  const data = await fetchJsonCached(`category-hierarchy-${lensTimeframe}.json`);
 
   list.innerHTML = '';
 
@@ -1713,7 +1781,8 @@ async function renderHabitsChart() {
     queryOpts = { categories: lensCategory };
   }
 
-  const primary = await fetch('/api/monthly' + buildQuery(start, end, queryOpts)).then(r => r.json());
+  const _primaryFile = await fetchJsonCached(habitsMonthlyFile(lensLevel, lensCategory, lensChartView));
+  const primary = filterPeriodsByRange(_primaryFile.periods || [], start, end);
   const periods = primary.map(d => d.period);
 
   const datasets = [];
@@ -1764,15 +1833,12 @@ async function renderHabitsChart() {
   // dashed line on top of the bars. Chart is always monthly, so we shift the
   // window by `periods.length` months ending at lensCompare.
   if (lensCompare && mode === 'single') {
-    const compareQuery = (() => {
-      const [cy, cm] = lensCompare.split('-').map(Number);
-      const cmpEnd   = new Date(cy, cm, 0);
-      const cmpStart = new Date(cy, cm - periods.length, 1);
-      const fmtD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      return buildQuery(fmtD(cmpStart), fmtD(cmpEnd), queryOpts);
-    })();
-
-    const compare = await fetch('/api/monthly' + compareQuery).then(r => r.json());
+    const fmtD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const [cy, cm] = lensCompare.split('-').map(Number);
+    const cmpEnd   = fmtD(new Date(cy, cm, 0));
+    const cmpStart = fmtD(new Date(cy, cm - periods.length, 1));
+    const _cmpFile = await fetchJsonCached(habitsMonthlyFile(lensLevel, lensCategory, lensChartView));
+    const compare = filterPeriodsByRange(_cmpFile.periods || [], cmpStart, cmpEnd);
     const compareTotals = compare.map(d => d.total || 0);
     while (compareTotals.length < periods.length) compareTotals.push(0);
     datasets.push({
@@ -1923,11 +1989,8 @@ function radialScopeKey() {
 async function fetchRadialDataScoped() {
   const key = radialScopeKey();
   if (_radialDataCache && _radialDataKey === key) return _radialDataCache;
-  const params = new URLSearchParams();
-  if (lensLevel === 'parent' && lensCategory) params.set('parent', lensCategory);
-  else if (lensLevel === 'leaf' && lensCategory) params.set('category', lensCategory);
-  const url = '/api/radial' + (params.toString() ? '?' + params.toString() : '');
-  _radialDataCache = await fetch(url).then(r => r.json());
+  const file = await fetchJsonCached(`radial-${scopeSlug(lensLevel, lensCategory)}.json`);
+  _radialDataCache = file.years || {};
   _radialDataKey   = key;
   return _radialDataCache;
 }
@@ -2243,8 +2306,7 @@ let _catMeta = null;
 let _catMetaPromise = null;
 function loadCategoryMeta() {
   if (!_catMetaPromise) {
-    _catMetaPromise = fetch('/api/category-meta')
-      .then(r => r.json())
+    _catMetaPromise = fetchJsonCached('category-meta.json')
       .then(rows => { _catMeta = rows; return rows; });
   }
   return _catMetaPromise;
@@ -2394,24 +2456,22 @@ function syncCompareOptions() {
 async function renderDrillDown() {
   if (!lensMonth) return;
 
-  const params = new URLSearchParams({ level: lensLevel, year_month: lensMonth });
-  if (lensCategory) params.set('category', lensCategory);
-
-  // Cache key includes scope so parent vs leaf detail don't collide.
+  // Static tree: one file per scope, with every month keyed inside.
+  const scopeFile = `category-detail-${scopeSlug(lensLevel, lensCategory)}.json`;
   const key = `${lensLevel}||${lensCategory}||${lensMonth}`;
   if (!catDetailCache[key]) {
-    catDetailCache[key] = await fetch('/api/category-detail?' + params).then(r => r.json());
+    const file = await fetchJsonCached(scopeFile);
+    catDetailCache[key] = (file.months || {})[lensMonth] || null;
   }
   const data = catDetailCache[key];
 
   let compareData = null;
   if (lensCompare && lensChartView !== 'stacked' && lensCompare !== lensMonth) {
-    const cParams = new URLSearchParams({ level: lensLevel, year_month: lensCompare });
-    if (lensCategory) cParams.set('category', lensCategory);
     const cKey = `${lensLevel}||${lensCategory}||${lensCompare}`;
     if (!catDetailCache[cKey]) {
       try {
-        catDetailCache[cKey] = await fetch('/api/category-detail?' + cParams).then(r => r.json());
+        const file = await fetchJsonCached(scopeFile);
+        catDetailCache[cKey] = (file.months || {})[lensCompare] || null;
       } catch (e) { catDetailCache[cKey] = null; }
     }
     compareData = catDetailCache[cKey];
@@ -3224,7 +3284,7 @@ function renderTransactionsHeader() {
 
 async function renderTransactionsTab() {
   if (!txnInited) {
-    const cats = await fetch('/api/categories/list').then(r => r.json());
+    const cats = await fetchJsonCached('categories.json');
     const catSel = document.getElementById('txn-cat-filter');
     cats.forEach(c => {
       const opt = document.createElement('option');
@@ -3265,7 +3325,7 @@ async function renderTransactionsTab() {
   // Load the whole list once (chips also need the category→parent map).
   if (!_allTransactions) {
     await loadCategoryMeta();
-    const data = await fetch('/api/transactions/all').then(r => r.json());
+    const data = await fetchJsonCached('transactions.json');
     _allTransactions = data.rows || [];
   }
 
@@ -3481,12 +3541,14 @@ function openTxnPanel(yearMonth, category) {
   // the layout transition's :focus-visible flash mid-animation.
   setTimeout(() => document.getElementById('txn-panel-close')?.focus(), 50);
 
-  const params = new URLSearchParams({ year_month: yearMonth, per_page: 500, page: 1 });
-  if (category) params.set('category', category);
-
-  fetch('/api/transactions?' + params)
-    .then(r => r.json())
-    .then(data => populateTxnPanel(data));
+  // Dormant code path — kept for a future "transaction detail" surface. Now
+  // filters the cached transactions.json client-side (mirrors the live tab).
+  fetchJsonCached('transactions.json').then(file => {
+    const rows = (file.rows || []).filter(t =>
+      t.date.slice(0, 7) === yearMonth && (!category || t.category === category)
+    );
+    populateTxnPanel({ rows });
+  });
 }
 
 function populateTxnPanel(data) {
@@ -3546,6 +3608,83 @@ function escHtml(str) {
   return String(str ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+// ── In-place persona switch ───────────────────────────────────────────────────
+// Called by the profile switcher after setActivePersona(key) writes localStorage.
+// Clears every cache + module-state var (any miss = stale data after switch),
+// refreshes the profile triggers to the new persona, then re-renders the
+// currently-active tab against the new persona's static JSON tree. activeTab
+// stays put — the user remains on the tab they were on.
+async function resetAndReload() {
+  // 1. Clear infra caches: HTTP JSON, Chart.js instances, the mobile scroll
+  // listener, any stranded tooltips.
+  clearJsonCache();
+  for (const id in _charts) _charts[id]?.destroy();
+  for (const id in _charts) delete _charts[id];
+  if (_largeTitleCleanup) { _largeTitleCleanup(); _largeTitleCleanup = null; }
+  hideCustomTooltip(); hideCjsTip();
+
+  // 2. Reset per-tab module state to v2 defaults.
+  overviewInited = false; overviewSnapshot = null; overviewMonths = []; overviewOverlay = false;
+  lensMonth = ''; lensCategory = ''; lensCompare = ''; lensTimeframe = 'last-12-months';
+  lensLevel = 'all'; lensChartView = 'total';
+  chartType = 'bar'; radialYears = new Set(); radialHighlightYear = null;
+  ddPieMode = 'proportion'; _ddLastData = null; _ddLastColor = null;
+  _radialDataCache = null; _radialDataKey = '';
+  _catMeta = null; _catMetaPromise = null;
+  habitsInited = false;
+  catSelectedMonth = ''; catCompareMonth = ''; catAllMonths = [];
+  catDetailCache = {}; catBubblePositions = []; catPrimaryBubbleDsIdx = 0;
+  txnInited = false; _allTransactions = null; txnVisibleMonths = 3; txnDayRange = null;
+
+  // 3. Refresh the profile-switcher's triggers + dropdown so the new persona
+  // shows as active. (Listeners on the panel rows are re-attached too.)
+  await _refreshProfilePanel();
+
+  // 4. Re-render the currently-active tab against the new persona.
+  if (activeTab === 'overview')          await initOverviewTab();
+  else if (activeTab === 'habits')       await initDashboard();
+  else if (activeTab === 'transactions') await renderTransactionsTab();
+}
+
+// Repaint the profile triggers + persona dropdown after a switch. Extracted so
+// both initProfileSwitcher (first paint) and resetAndReload (re-paint) share it.
+async function _refreshProfilePanel() {
+  let datasets = [];
+  try { datasets = await fetchPersonasJson(); } catch (e) { return; }
+  const activeKey = getActivePersona();
+  const active    = datasets.find(d => d.key === activeKey) || datasets[0];
+
+  if (active) {
+    const nameEl  = document.getElementById('profile-name');
+    const badgeEl = document.getElementById('profile-badge');
+    const mBadge  = document.getElementById('profile-badge-mobile')?.querySelector('span');
+    if (nameEl)  nameEl.textContent  = active.label;
+    if (badgeEl) badgeEl.textContent = _profileInitial(active.key);
+    if (mBadge)  mBadge.textContent  = _profileInitial(active.key);
+  }
+
+  const panel = document.getElementById('profile-panel');
+  if (!panel) return;
+  panel.innerHTML = `<p class="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-neutral-400">Dataset</p>`
+    + datasets.map(d => {
+        const isA = d.key === activeKey;
+        return `<button type="button" data-key="${d.key}" class="flex items-center gap-2.5 w-full px-3 py-2 text-left hover:bg-neutral-50 focus:outline-none focus:bg-neutral-50">
+          <span class="w-6 h-6 rounded-md bg-neutral-100 text-neutral-600 text-xs font-semibold flex items-center justify-center shrink-0" aria-hidden="true">${_profileInitial(d.key)}</span>
+          <span class="flex-1 min-w-0 text-sm truncate ${isA?'font-semibold text-neutral-900':'text-neutral-700'}">${escHtml(d.label)}</span>
+          ${isA?'<span class="text-accent-700 shrink-0" aria-label="active">✓</span>':''}
+        </button>`;
+      }).join('');
+  panel.querySelectorAll('button[data-key]').forEach(item => {
+    item.addEventListener('click', async () => {
+      const key = item.dataset.key;
+      if (key === getActivePersona()) { closeProfileMenu(); return; }
+      setActivePersona(key);
+      closeProfileMenu();
+      await resetAndReload();
+    });
+  });
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────

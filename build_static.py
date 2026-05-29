@@ -140,6 +140,14 @@ def precompute_persona(persona_key: str, api_root: Path) -> None:
     write_json(out / "category-hierarchy.json",
                {"months": {m: dp.get_category_hierarchy(m) for m in months}})
 
+    # Per-timeframe hierarchies — what the Habits scope dropdown reads (totals
+    # over the active timeframe, not a single month). Range matches the chart's
+    # avg window (same logic as the frontend's dateRangeFor()).
+    for timeframe in TIMEFRAME_PRESETS:
+        start, end = derive_avg_range(timeframe, months)
+        write_json(out / f"category-hierarchy-{timeframe}.json",
+                   dp.get_category_hierarchy(None, start=start or None, end=end or None))
+
     write_json(out / "transactions.json", {"rows": dp.transactions_all()})
 
     write_json(out / "overview-snapshot.json",
@@ -186,6 +194,19 @@ def precompute_persona(persona_key: str, api_root: Path) -> None:
         "periods": monthly_for_scope("all", "", "month", group_by="parent"),
     })
 
+    # Per-parent stacked-by-child — same shape as the all-by-parent file but
+    # under each parent (its leaves become the stack keys). Drives the Habits
+    # bar chart's stacked view at parent scope.
+    for (level, category) in scopes:
+        if level != "parent":
+            continue
+        slug = scope_slug(level, category)
+        write_json(out / f"monthly-{slug}-month-by-child.json", {
+            "granularity": "month",
+            "group_by": "parent",
+            "periods": monthly_for_scope(level, category, "month", group_by="parent"),
+        })
+
     # ── category-detail: one file per scope, all months keyed inside ───────
     for (level, category) in scopes:
         slug = scope_slug(level, category)
@@ -210,8 +231,10 @@ def precompute_persona(persona_key: str, api_root: Path) -> None:
 
 
 def render_index_html() -> None:
-    """Render templates/v2-index.html via Jinja with BUILD_HASH + DEPLOY_URL
-    substituted; write to dist/index.html.
+    """Render templates/index.html (the real app shell — extends base.html with
+    every tab's markup) via Jinja and write it to dist/index.html. The v2
+    frontend fetches /api/{persona}/*.json directly, so the static deploy needs
+    no Python runtime.
     """
     from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -219,7 +242,7 @@ def render_index_html() -> None:
         loader=FileSystemLoader(TEMPLATES_SRC),
         autoescape=select_autoescape(["html"]),
     )
-    tmpl = env.get_template("v2-index.html")
+    tmpl = env.get_template("index.html")
     html = tmpl.render(BUILD_HASH=BUILD_HASH, DEPLOY_URL=DEPLOY_URL)
     (DIST / "index.html").write_text(html)
 

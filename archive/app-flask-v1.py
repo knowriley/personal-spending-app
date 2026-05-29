@@ -1,8 +1,29 @@
-from flask import Flask, jsonify, render_template, request
+from pathlib import Path
+from flask import Flask, jsonify, render_template, request, send_from_directory, abort
 import data_processor as dp
 
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
+
+# v2 dev convenience: serve the static persona-JSON tree (built by build_static.py
+# into dist/api/) so the v2 frontend can run against :5001 the same way it runs
+# in the static production deploy. M14a-8 archives the Flask backend entirely —
+# this passthrough goes away then; dev will use a static server directly.
+_DIST_API = Path(__file__).parent / "dist" / "api"
+
+@app.route("/api/personas.json")
+def api_personas_json():
+    f = _DIST_API / "personas.json"
+    if not f.exists(): abort(404)
+    return send_from_directory(str(_DIST_API), "personas.json")
+
+@app.route("/api/<persona>/<path:rest>")
+def api_persona_static(persona, rest):
+    base = _DIST_API / persona
+    full = base / rest
+    if not full.exists() or not str(full.resolve()).startswith(str(base.resolve())):
+        abort(404)
+    return send_from_directory(str(base), rest)
 
 
 @app.route("/")

@@ -6,14 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 pip install -r requirements.txt
-python app.py
+python build_static.py
+cd dist && python -m http.server 5001
 ```
 
-The app runs at `http://localhost:5001` in debug mode.
+Open `http://localhost:5001`. There is no Python at runtime — `build_static.py` emits the entire app shell + data tree into `dist/`, and any static server (or `./dev.sh` for iPhone HTTPS via cloudflared tunnel) can host it. After a code change: rebuild (or just re-run `build_static.py`) and refresh.
 
-## v2 in progress
+## v2 done — static PWA
 
-This repo is migrating from v1 (Flask + Plotly + live backend) to v2 (static PWA + Chart.js + pre-computed JSON).
+This repo migrated from v1 (Flask + Plotly + live backend) to v2 (static PWA + Chart.js + pre-computed JSON). The v1 Flask backend is archived at `archive/app-flask-v1.py` for reference. The full planning suite lives in `docs/`:
 
 The v2 work happens on the `v2` branch. The full planning suite lives in `docs/`:
 
@@ -29,13 +30,15 @@ Implementation follows the phasing doc strictly. Start with M0 (walking skeleton
 
 ## Architecture
 
-**Flask backend (`app.py`)** — thin routing layer. All business logic lives in `data_processor.py`.
+**No runtime backend.** v2 runs as a static PWA — `build_static.py` pre-computes the entire data view tree into `dist/api/{persona}/*.json` and `dist/index.html` is the rendered shell. The frontend reads `/api/{active-persona}/<file>.json` via `fetchJsonCached()` (`static/js/app.js`); the active persona is in localStorage. The v1 Flask routing layer lives at `archive/app-flask-v1.py` for reference only.
+
+**Build-time data layer (`data_processor.py`)** — invoked at build time by `build_static.py` (not at runtime). All business logic still lives here.
 
 **Data layer (`data_processor.py`)** — two cached module-level DataFrames, both lazily loaded on first access. The CSV path resolves through `get_active_dataset()` against the `DATASETS` registry — see "Datasets" below. A full walkthrough of the CSV → frame pipeline (filters, derived columns, per-request derivations) lives in [`DATA-PIPELINE.md`](./DATA-PIPELINE.md).
 - `_df` (via `load_data()`) — "spending only" frame used by every existing tab. Filters to `type == "regular"`, `excluded != true`, `status != "planned"`, `amount > 0`.
 - `_df_full` (via `load_full_data()`) — **reserved for future use**: frame intended for an Overview income-vs-spending viz. Currently dormant — no frontend code calls the endpoints that read it. Includes both `type == "regular"` (with the same `excluded` filter) and `type == "income"` rows. Income rows in Copilot's export are flagged `excluded=true` by convention, so the `excluded` filter is intentionally NOT applied to income rows. Income amounts are stored as positive values in the `pos_amount` column. Internal-transfer rows are excluded.
 
-`set_active_dataset(key)` clears both DataFrame caches and the cached active key — the next API call lazy-rehydrates from the new CSV. The Settings-sheet persona switcher follows up with a full page reload, so all in-memory frontend state resets at the same time.
+`set_active_dataset(key)` clears both DataFrame caches and the cached active key — used at build time when iterating CSVs. **Runtime persona-switching is purely frontend** (M14a): `setActivePersona(key)` writes to `localStorage['mh-active-persona']`, `resetAndReload()` clears `_jsonCache` + every module-state var + every Chart.js instance, then re-renders the active tab against `/api/{new-persona}/…json`. No reload, no server hop.
 
 Category normalization (applied to both frames): uses `category` if present, falls back to `parent category`, then `"Uncategorized"` — stored as `category_norm`. The CSV's `parent category` column is also surfaced via `category_meta()` (one row per `category_norm`, with the most common parent for that leaf or `None` for orphans). The frontend joins on `category_norm` to inherit colors from parent groups.
 
@@ -76,7 +79,7 @@ The app ships two persona datasets and a header dropdown that swaps between them
 
 - **Registry**: `DATASETS` in `data_processor.py` maps `key → {label, path}`. Add new personas by appending entries here (and dropping the CSV at the matching path) — no other code changes required.
 - **Files**: `datasets/student.csv` (NYC Student) and `datasets/young-pro.csv` (NYC Young Professional). Both are gitignored by default since they may contain personal-export data; remove the `datasets/*.csv` line in `.gitignore` before committing synthetic personas to a public repo.
-- **Active selection**: persisted in `.active-dataset` (gitignored, lazily created at the project root). Defaults to `student` when missing or invalid. Read via `get_active_dataset()`, written via `set_active_dataset(key)`.
+- **Active selection (runtime)**: per-device, persisted in `localStorage['mh-active-persona']`. Defaults to `student`. Read via `getActivePersona()`, written via `setActivePersona(key)` (both in `static/js/app.js`). The v1 `.active-dataset` file is gone (M14a). At build time `set_active_dataset(key)` still flips which CSV the build reads from, but the build iterates every persona anyway, so this only matters when running `data_processor` interactively.
 - **UI**: the profile/dataset switcher, built by `initProfileSwitcher()` in `static/js/app.js` — the rail's `#profile-btn` (desktop) + `#profile-badge-mobile` (mobile) opening the shared `#profile-panel` dropdown. Selection triggers `POST /api/datasets/active` followed by a full page reload — this is the simplest reset path across the lazy DataFrame caches and all frontend state (Overview snapshot, lens state, transactions filters, etc.). A later task may swap the reload for an in-place re-render.
 
 ## CSV format
