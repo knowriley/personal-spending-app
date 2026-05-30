@@ -124,6 +124,22 @@ def load_full_data() -> pd.DataFrame:
     return _df_full
 
 
+def monthly_income_totals() -> dict[str, float]:
+    """Per-month total income for the active dataset, keyed YYYY-MM → dollars.
+
+    Reads from `_df_full` (which already filters internal transfers and the
+    excluded flag correctly for income rows). Used at build time to emit
+    `monthly-income.json` for the drill-down's spend↔income denominator
+    toggle.
+    """
+    df = load_full_data()
+    income = df[df["type_norm"] == "income"]
+    if income.empty:
+        return {}
+    grouped = income.groupby("year_month")["pos_amount"].sum()
+    return {str(k): round(float(v), 2) for k, v in grouped.items()}
+
+
 def get_monthly_totals(
     categories=None,
     start: Optional[str] = None,

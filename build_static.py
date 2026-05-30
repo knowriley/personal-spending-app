@@ -12,6 +12,7 @@ revalidate. Cache names are versioned by BUILD_HASH so deploys clean up
 on activate.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -30,14 +31,34 @@ DIST = ROOT / "dist"
 STATIC_SRC = ROOT / "static"
 TEMPLATES_SRC = ROOT / "templates"
 
-# Build identity — short git SHA when available, "dev" otherwise.
-# Used as a cache-bust query string on every asset URL and as the cache
-# version suffix in the service worker (M6+).
-BUILD_HASH = (
-    subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    if (ROOT / ".git").exists()
-    else "dev"
-)
+# Build identity — short git SHA when available, "dev" otherwise. When the
+# working tree is dirty (any uncommitted change), append a short content hash
+# of every tracked + working-tree source so each local rebuild produces a
+# unique BUILD_HASH; the service worker keys its shell cache off this string,
+# so without the dirty suffix dev rebuilds reuse the prior cache and the
+# browser keeps serving the previous shell.
+def _compute_build_hash() -> str:
+    if not (ROOT / ".git").exists():
+        return "dev"
+    sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+    is_dirty = subprocess.call(
+        ["git", "diff", "--quiet", "HEAD"], cwd=ROOT,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ) != 0
+    if not is_dirty:
+        return sha
+    h = hashlib.sha1()
+    for sub in ("templates", "static", "data_processor.py", "build_static.py"):
+        p = ROOT / sub
+        if not p.exists(): continue
+        targets = [p] if p.is_file() else sorted(p.rglob("*"))
+        for f in targets:
+            if not f.is_file(): continue
+            h.update(str(f.relative_to(ROOT)).encode())
+            h.update(f.read_bytes())
+    return f"{sha}-{h.hexdigest()[:7]}"
+
+BUILD_HASH = _compute_build_hash()
 
 # Absolute origin URL. Required for og:image and og:url (relative URLs
 # don't resolve in iMessage/Slack link-preview contexts). Render's env var
@@ -152,6 +173,10 @@ def precompute_persona(persona_key: str, api_root: Path) -> None:
 
     write_json(out / "overview-snapshot.json",
                {"months": {m: dp.get_overview_snapshot(m) for m in months}})
+
+    # Per-month total income — used by the drill-down's spend↔income toggle
+    # to recompute % of category as a share of monthly income instead of spend.
+    write_json(out / "monthly-income.json", {"months": dp.monthly_income_totals()})
 
     write_json(out / "top-categories-none.json",
                {"exclude": [], "months": {m: dp.get_top_categories(m) for m in months}})
@@ -388,7 +413,7 @@ def verify(api_root: Path) -> None:
         singletons = [
             "categories.json", "months.json", "category-meta.json",
             "category-hierarchy.json", "transactions.json",
-            "overview-snapshot.json",
+            "overview-snapshot.json", "monthly-income.json",
             "top-categories-none.json", "top-categories-default.json",
         ]
         for r in singletons:

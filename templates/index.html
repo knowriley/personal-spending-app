@@ -4,9 +4,10 @@
 
 <!-- ── OVERVIEW TAB ────────────────────────────────────────────── -->
 <section id="section-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0" class="hidden focus:outline-none">
-  <!-- v2: single-column stack — snapshot, cumulative chart, top categories. -->
-  <div class="flex flex-col gap-4 max-w-2xl">
-    <div id="overview-card1"></div>
+  <!-- v2: single-column stack — cumulative chart (which now leads with the big
+       MTD value + smart message in its header), then top categories. Fills the
+       full content row (caps at base.html's max-w-[1600px]). -->
+  <div class="flex flex-col gap-4">
     <div id="overview-chart-card" class="bg-white border border-neutral-200 rounded-lg p-4 sm:p-6"></div>
     <div id="overview-card4"></div>
   </div>
@@ -16,12 +17,11 @@
 <!-- ── HABITS TAB (formerly Dashboard) ─────────────────────────── -->
 <section id="section-habits" role="tabpanel" aria-labelledby="tab-habits" tabindex="0" class="hidden focus:outline-none">
 
-<!-- ── Two-pane: chart (left) + month drill-down (right). At ≥1024px both show
-     side-by-side, 50/50; below that the right pane is the off-screen home and the
-     drill-down opens as a flyout on bar click (openDrillDownFlyout). -->
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start mb-6">
+<!-- Chart card spans the full content row. The drill-down always opens as a
+     right-side flyout (any breakpoint); #habits-drilldown stays in the DOM as
+     the persistent off-screen home for re-parenting on dismiss. -->
+<div class="mb-6">
 
-  <!-- Left: chart card. Also the flyout's compressTarget on narrow. -->
   <div id="habits-explorer" class="min-w-0">
 
     <!-- Chart card -->
@@ -100,14 +100,34 @@
 
   </div><!-- /habits-explorer (chart pane) -->
 
-  <!-- Right: month drill-down. Visible side-by-side at ≥1024px; below that it's
-       hidden and serves as the off-screen home — #cat-drilldown-section is
-       re-parented into the flyout on bar click and moved back here on dismiss. -->
-  <div id="habits-drilldown" class="hidden lg:block min-w-0">
+  <!-- Off-screen home for the drill-down. #cat-drilldown-section is re-parented
+       into the flyout or the #habits-fullpage-host below on click, and moved
+       back here on dismiss. -->
+  <div id="habits-drilldown" class="hidden">
     <div id="cat-drilldown-section"></div>
   </div>
 
-</div><!-- /two-pane grid -->
+</div><!-- /habits chart row -->
+
+<!-- Full-page drill-down host. Sibling to the chart row; toggled via
+     expandDrillDownToFullPage() / dismissFullPage() in app.js. Hash routes
+     through #habits/detail so the browser back button works. -->
+<div id="habits-fullpage" class="hidden">
+  <!-- The breadcrumb lives in the page-title block (setHabitsDetailHeader);
+       this in-page strip is hidden but kept in case we want it back later. -->
+  <nav id="habits-fullpage-crumbs" class="hidden flex items-center text-sm text-neutral-500 mb-4" aria-label="Breadcrumb">
+    <button type="button" id="habits-fullpage-back"
+      class="inline-flex items-center gap-1 hover:text-neutral-800 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-sm">
+      <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 0 1 0 1.06L9.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"/>
+      </svg>
+      <span>Habits</span>
+    </button>
+    <span class="mx-2" aria-hidden="true">/</span>
+    <span id="habits-fullpage-label" class="text-neutral-800 font-medium"></span>
+  </nav>
+  <div id="habits-fullpage-host"></div>
+</div>
 
 
 </section><!-- /section-habits -->

@@ -197,6 +197,17 @@
 .rail-btn:not(.is-active):hover { background: var(--color-gray-100); }
 .rail-btn.is-active { background: var(--color-accent-50); }
 
+/* Collapsed rail: narrows to 56px, hides every .rail-collapsible (labels +
+   profile name + chevron), centers nav icons. Toggle chevron rotates 180°. */
+#side-rail { transition: width 0.18s ease; }
+#side-rail[data-collapsed="true"] { width: 3.5rem; }
+#side-rail[data-collapsed="true"] .rail-collapsible { display: none; }
+#side-rail[data-collapsed="true"] .rail-btn { justify-content: center; padding: 0; gap: 0; margin: 2px 4px; }
+#side-rail[data-collapsed="true"] #profile-btn { justify-content: center; padding: 8px 0; margin-left: 4px; margin-right: 4px; gap: 0; }
+#side-rail[data-collapsed="true"] #rail-collapse-btn { justify-content: center; padding: 8px 0; margin-left: 4px; margin-right: 4px; gap: 0; }
+#rail-collapse-btn svg { transition: transform 0.18s ease; }
+#side-rail[data-collapsed="true"] #rail-collapse-btn svg { transform: rotate(180deg); }
+
 /* Bottom-bar cell (mobile): stacked icon + label, equal thirds. */
 .bottom-btn {
   flex-direction: column;

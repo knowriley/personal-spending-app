@@ -49,11 +49,11 @@ The scale is intentionally narrow. Don't introduce new sizes ad-hoc. **Same scal
 
 | Use | Class | Px |
 |---|---|---|
-| **Large-title (initial state)** — `#page-title` | `text-4xl font-bold tracking-tight text-neutral-900` | 36 |
+| **Large-title (initial state)** — `#page-title` | `text-3xl font-bold tracking-tight text-neutral-900` | 30 |
 | **Sticky title (mobile, on scroll)** — `#sticky-title` | `text-2xl font-semibold tracking-tight text-neutral-900` | 24 |
 | Eyebrow above the large title | `text-base font-semibold text-neutral-600` | 16 |
-| Card value (primary number) | `text-6xl font-semibold tracking-tight text-neutral-900 tabular-nums` | 60 |
-| Card value placeholder (`—`) | `text-6xl font-semibold tracking-tight text-neutral-500 cursor-help` | 60 |
+| Card value (primary number) | `text-4xl font-semibold tracking-tight text-neutral-900 tabular-nums` | 36 |
+| Card value placeholder (`—`) | `text-4xl font-semibold tracking-tight text-neutral-500 cursor-help` | 36 |
 | Card label | `text-base font-semibold text-neutral-900` | 16 |
 | Card body list row | `text-base font-medium text-neutral-900` | 16 |
 | Card context line (e.g. smart message) | `text-sm font-medium` + direction color | 14 |
@@ -66,7 +66,7 @@ The scale is intentionally narrow. Don't introduce new sizes ad-hoc. **Same scal
 
 Always pair `font-semibold` with `tracking-tight` for large numerals — Inter at large sizes looks loose without it.
 
-> **v2 note** — v1's `text-3xl` `<h1>` is replaced by the **large-title pattern**: a 36pt title in the content area that shrinks (opacity + scale) into a 24pt sticky title at the top of the viewport over 60pt of scroll on mobile. Desktop shows the large title statically (the side rail is the persistent chrome). Wired via `MoneyHabitsIOS.initLargeTitleScroll(scrollContainer, { largeTitle, stickyBar })` in `static/js/ios.js` (mobile only — `syncHeaderScroll()` in `app.js` re-wires on the 768px breakpoint).
+> **v2 note** — v1's `text-3xl` `<h1>` is replaced by the **large-title pattern**: a 30pt title in the content area that shrinks (opacity + scale) into a 24pt sticky title at the top of the viewport over 60pt of scroll on mobile. Desktop shows the large title statically (the side rail is the persistent chrome). Wired via `MoneyHabitsIOS.initLargeTitleScroll(scrollContainer, { largeTitle, stickyBar })` in `static/js/ios.js` (mobile only — `syncHeaderScroll()` in `app.js` re-wires on the 768px breakpoint).
 
 ### 1.3 Spacing
 

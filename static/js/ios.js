@@ -128,11 +128,12 @@
       padding-bottom: max(16px, env(safe-area-inset-bottom));
     }
 
+    /* .mh-ios-compress is a no-op container hook today — the flyout overlays
+       the right edge at every breakpoint instead of pushing content left. The
+       class + data-flyout-open attribute are still set so external code can
+       observe the open state if needed. */
     .mh-ios-compress {
       transition: width ${FLYOUT_MS}ms ${EASING_IOS};
-    }
-    @media (min-width: ${MOBILE_BREAKPOINT_PX}px) {
-      .mh-ios-compress[data-flyout-open="true"] { width: 50%; }
     }
   `;
 
@@ -373,7 +374,7 @@
     injectStyles();
     if (activeFlyout) closeRightFlyout();
 
-    const { content, title = '', onDismiss = null, compressTarget = null } = opts || {};
+    const { content, title = '', onDismiss = null, onExpand = null, compressTarget = null } = opts || {};
     const returnFocusTo = document.activeElement;
 
     const flyout = document.createElement('div');
@@ -405,6 +406,28 @@
 
     header.appendChild(back);
     header.appendChild(titleEl);
+
+    // Optional expand button — caller passes onExpand to get a Notion-style
+    // "open as full page" affordance to the left of the close button.
+    if (onExpand) {
+      const expand = document.createElement('button');
+      expand.type = 'button';
+      expand.className = 'mh-ios-flyout-close';
+      expand.setAttribute('aria-label', 'Open as full page');
+      expand.title = 'Open as full page';
+      expand.innerHTML = expandIconSvg();
+      expand.addEventListener('click', () => {
+        // Skip the normal onDismiss path — caller will re-parent the content
+        // into its full-page home before/after the flyout tears down.
+        const cb = onExpand;
+        if (activeFlyout) activeFlyout.onDismiss = null;
+        cb(content);
+        closeRightFlyout();
+      });
+      header.style.gridTemplateColumns = '44px 1fr 44px 44px';
+      header.appendChild(expand);
+    }
+
     header.appendChild(close);
     flyout.appendChild(header);
 
@@ -431,7 +454,11 @@
     const onKeydown = (e) => { if (e.key === 'Escape') closeRightFlyout(); };
     document.addEventListener('keydown', onKeydown);
 
-    // Click on the compress target (desktop "click outside") dismisses
+    // Click on the compress target (desktop "click outside") dismisses.
+    // Install in a microtask so the *opening* click — which is still bubbling
+    // up the DOM at this point — doesn't immediately re-trigger and close us.
+    // (Bar-chart clicks dodge this because Chart.js dispatches onClick async;
+    // SVG-radial clicks fire synchronously and would self-cancel otherwise.)
     let releaseOutsideClick = null;
     if (compressTarget && window.matchMedia(`(min-width: ${MOBILE_BREAKPOINT_PX}px)`).matches) {
       const onClickOutside = (e) => {
@@ -439,8 +466,13 @@
           closeRightFlyout();
         }
       };
-      compressTarget.addEventListener('click', onClickOutside);
-      releaseOutsideClick = () => compressTarget.removeEventListener('click', onClickOutside);
+      const armId = setTimeout(() => {
+        compressTarget.addEventListener('click', onClickOutside);
+      }, 0);
+      releaseOutsideClick = () => {
+        clearTimeout(armId);
+        compressTarget.removeEventListener('click', onClickOutside);
+      };
     }
 
     lockBodyScroll();
@@ -536,6 +568,13 @@
   function closeIconSvg() {
     return '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">' +
            '<path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/>' +
+           '</svg>';
+  }
+
+  // Arrow-up-right "open as full page" icon used in the flyout chrome.
+  function expandIconSvg() {
+    return '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+           '<path d="M7 5h8v8"/><path d="M15 5 5 15"/>' +
            '</svg>';
   }
 

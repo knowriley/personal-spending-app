@@ -18,6 +18,7 @@ function fmt(n) {
 // fetchJsonCached() memoizes responses so re-renders + cross-tab lookups don't
 // re-fetch; a persona switch calls clearJsonCache() before re-rendering.
 const PERSONA_KEY = 'mh-active-persona';
+const RAIL_COLLAPSED_KEY = 'mh-rail-collapsed';
 let _activePersona = null;
 function getActivePersona() {
   if (_activePersona) return _activePersona;
@@ -271,9 +272,12 @@ function setPageHeader(title, subtitle = '') {
   if (subEl)   subEl.innerHTML = subtitle ? escHtml(subtitle) : '&nbsp;';
 }
 
-// Map the URL hash to a tab name (or null if it isn't one of ours).
+// Map the URL hash to a tab name (or null if it isn't one of ours). The
+// Habits full-page detail view lives under "habits/detail" — it still maps
+// back to the "habits" tab; the detail toggle is handled separately.
 function tabFromHash() {
   const h = (location.hash || '').replace(/^#/, '');
+  if (h === 'habits/detail') return 'habits';
   return ['overview', 'habits', 'transactions'].includes(h) ? h : null;
 }
 
@@ -282,6 +286,9 @@ function showTab(name, opts = {}) {
   // Close the Habits page-header chip dropdown on any tab change so leaving
   // Habits with the panel open doesn't leave it visible elsewhere.
   document.getElementById('hc-chip-panel')?.classList.add('hidden');
+  // Leaving Habits (or returning to it via a fresh nav click) drops the
+  // full-page detail back to the chart pane.
+  if (name !== 'habits') dismissFullPage({ updateHash: false });
   if (name === 'overview') {
     if (overviewSnapshot) renderOverviewHeader(overviewSnapshot);
     else setPageHeader('Overview', '');
@@ -352,9 +359,12 @@ document.querySelectorAll('[data-tab]').forEach(btn => {
 });
 
 // Back / forward → restore the tab without pushing a fresh history entry.
+// The Habits "detail" sub-view (hash #habits/detail) is reconciled by checking
+// the new state: if not in detail anymore, dismiss the full-page view.
 window.addEventListener('popstate', e => {
   const t = (e.state && e.state.tab) || tabFromHash() || 'overview';
   showTab(t, { updateHash: false });
+  if (location.hash !== '#habits/detail') dismissFullPage({ updateHash: false });
 });
 
 // Wire the large-title scroll-shrink to the current breakpoint, re-wiring on change.
@@ -561,7 +571,6 @@ const OVERVIEW_DEFAULT_EXCLUDES = ['Rent'];
 let overviewInited   = false;
 let overviewSnapshot = null;
 let overviewMonths   = [];
-let overviewOverlay  = false;   // cumulative chart: false = single line, true = overlay last month
 
 async function initOverviewTab() {
   if (overviewInited) return;
@@ -607,11 +616,9 @@ async function loadAndRenderOverview(month) {
   } catch (e) { /* swallow — render empty */ }
   topCats = (topCats || []).slice(0, 3);
 
-  overviewOverlay = false;   // each month opens with the single-line default
   renderOverviewHeader(snap);
-  renderCard1(snap);
-  renderCard4(topCats, snap.month);
   renderOverviewLineChart(snap);
+  renderCard4(topCats, snap.month);
   wireOverviewActions(snap);
 }
 
@@ -820,22 +827,19 @@ function linkButton(label, action) {
   `;
 }
 
-// Card-level shared classes (constants so all four cards stay in lockstep).
+// Card-level shared classes (used by Card 4 + the chart card's hero header).
 const CARD_SHELL = 'bg-white border border-neutral-200 rounded-lg p-6 h-full flex flex-col';
 const CARD_LABEL = 'text-base font-semibold text-neutral-900';
-const CARD_VALUE = 'text-6xl font-semibold tracking-tight text-neutral-900 mt-3 break-words';
-const CARD_VALUE_MISS = 'text-6xl font-semibold tracking-tight text-neutral-500 mt-3 cursor-help';
+const CARD_VALUE = 'text-4xl font-semibold tracking-tight text-neutral-900 mt-3 break-words';
 
-function renderCard1(snap) {
-  const card = document.getElementById('overview-card1');
-  if (!card) return;
-
+// Hero header for the chart card — the big MTD value + smart-message
+// recommendation that used to live in its own Card 1. Rendered inline above
+// the chart so the page leads with one consolidated block.
+function overviewChartHeaderHtml(snap) {
   const message = computeSmartMessage(snap);
   const monthLabel = formatMonthLabel(snap.month);
   const cardLabel = snap.is_partial ? `Spent so far in ${monthLabel}` : `Spent in ${monthLabel}`;
 
-  // Color the smart message by direction: up = more spending = red,
-  // down = less spending = green, flat = neutral. Trend icon mirrors color.
   const msgColor = message?.direction === 'up'   ? 'text-utility-red-700'
                  : message?.direction === 'down' ? 'text-utility-green-700'
                  :                                 'text-neutral-600';
@@ -846,13 +850,10 @@ function renderCard1(snap) {
       </p>`
     : '';
 
-  card.innerHTML = `
-    <div class="${CARD_SHELL}">
-      <p class="${CARD_LABEL}">${escHtml(cardLabel)}</p>
-      <p class="${CARD_VALUE}">${fmt(snap.this_month_total)}</p>
-      ${messageHtml}
-      <div class="mt-auto pt-6">${linkButton('See transactions', 'tx-current')}</div>
-    </div>
+  return `
+    <p class="${CARD_LABEL}">${escHtml(cardLabel)}</p>
+    <p class="${CARD_VALUE}">${fmt(snap.this_month_total)}</p>
+    ${messageHtml}
   `;
 }
 
@@ -884,7 +885,8 @@ function renderCard4(topCats, month) {
   `;
 }
 
-// One delegated listener for all four cards' ghost buttons.
+// Delegated click handler for Overview ghost buttons (currently just Card 4's
+// "Open in Habits" linkout).
 function wireOverviewActions(snap) {
   const section = document.getElementById('section-overview');
   if (!section) return;
@@ -892,18 +894,9 @@ function wireOverviewActions(snap) {
     el.addEventListener('click', e => {
       e.preventDefault();
       const action = el.dataset.overviewAction;
-      if (action === 'tx-current')      goToTransactionsCurrent(snap);
-      if (action === 'tx-prev-partial') goToTransactionsPrevPartial(snap);
-      if (action === 'habits-3mo')      goToHabits('3mo');
-      if (action === 'habits-month')    goToHabits({ month: snap.month });
+      if (action === 'habits-month') goToHabits({ month: snap.month });
     });
   });
-}
-
-// Cumulative chart heading. The overlay toggle (not the title) now carries the
-// month-vs-month comparison, so the title just names the cumulative view.
-function chartTitleFor(month) {
-  return `Cumulative spend in ${formatMonthLabel(month)}`;
 }
 
 function renderOverviewLineChart(snap) {
@@ -916,31 +909,11 @@ function renderOverviewLineChart(snap) {
   destroyChart('overview-chart');
 
   const chartH = window.innerWidth < 768 ? 240 : 320;
-  const lastLabel = formatMonthLabel(prevMonthOf(snap.month));
-  const hasLast = !!(snap.last_cumulative && snap.last_cumulative.length);
-  // Overlay toggle (only meaningful when there's a prior month to overlay).
-  const toggleHtml = hasLast ? `
-    <button type="button" id="ov-overlay-toggle" role="switch" aria-checked="${overviewOverlay}"
-      class="flex items-center gap-2 shrink-0 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-full">
-      <span class="text-xs text-neutral-500 whitespace-nowrap">Overlay ${escHtml(lastLabel)}</span>
-      <span class="relative inline-block w-9 h-5 rounded-full transition-colors ${overviewOverlay ? 'bg-accent-700' : 'bg-neutral-300'}">
-        <span class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${overviewOverlay ? 'translate-x-4' : ''}"></span>
-      </span>
-    </button>` : '';
 
   container.innerHTML = `
-    <div class="flex items-center justify-between gap-3">
-      <p class="text-base font-semibold text-neutral-900">${escHtml(chartTitleFor(snap.month))}</p>
-      ${toggleHtml}
-    </div>
-    <div id="overview-chart" class="w-full mt-3" style="height:${chartH}px"></div>
+    ${overviewChartHeaderHtml(snap)}
+    <div id="overview-chart" class="w-full mt-6" style="height:${chartH}px"></div>
   `;
-
-  // Toggle flips overlay state and re-renders just the chart card.
-  document.getElementById('ov-overlay-toggle')?.addEventListener('click', () => {
-    overviewOverlay = !overviewOverlay;
-    renderOverviewLineChart(snap);
-  });
 
   const accentColor = token('color-accent-700');
   const greyColor   = token('color-gray-400');
@@ -973,8 +946,11 @@ function renderOverviewLineChart(snap) {
       tension: 0, spanGaps: true,
     });
   }
-  // Last-month line only when the overlay toggle is on (single-line default).
-  if (overviewOverlay && snap.last_cumulative?.length) {
+  // Prior-month dashed grey line always overlays when the data is there —
+  // the snapshot helper above carries the month-vs-month comparison in text,
+  // and this chart visualizes it.
+  if (snap.last_cumulative?.length) {
+    const lastLabel = formatMonthLabel(prevMonthOf(snap.month));
     datasets.push({
       label: `Last month (${lastLabel})`,
       data: seriesByDay(snap.last_cumulative),
@@ -1025,28 +1001,8 @@ function cjsTipOverviewCumul(ctx) {
   };
 }
 
-// Navigation helpers — set window.moneyHabitsNav, then switch tabs. Other tabs
-// read the nav state when they activate.
-
-function goToTransactionsCurrent(snap) {
-  window.moneyHabitsNav = { tab: 'transactions', year_month: snap.month };
-  showTab('transactions');
-}
-
-function goToTransactionsPrevPartial(snap) {
-  // Partial focused month → MTD-day-range filter (matches Card 2's "Through Apr 9").
-  // Complete focused month → land on the full prior month (matches "Spent in March 2026").
-  const hasPartialAnchor  = snap.is_partial && snap.last_month_mtd  != null;
-  const hasCompleteAnchor = !snap.is_partial && snap.last_month_total != null;
-  if (!hasPartialAnchor && !hasCompleteAnchor) return;
-
-  const lastMonth = prevMonthOf(snap.month);
-  window.moneyHabitsNav = hasPartialAnchor
-    ? { tab: 'transactions', year_month: lastMonth, start_day: 1, end_day: snap.through_day }
-    : { tab: 'transactions', year_month: lastMonth };
-  showTab('transactions');
-}
-
+// Navigation helper — sets window.moneyHabitsNav then switches tabs. The
+// destination tab reads the nav state when it activates.
 function goToHabits(scope) {
   window.moneyHabitsNav = (typeof scope === 'string') ? { tab: 'habits', scope } : { tab: 'habits', ...(scope || {}) };
   showTab('habits');
@@ -1073,10 +1029,24 @@ let chartType    = 'bar';                 // 'bar' | 'radial'
 let radialYears  = new Set();             // YYYY strings, populated on first radial activation
 let radialHighlightYear = null;           // YYYY of the click-pinned year (null = no pin)
 
+// Explicit focus state for the bar chart's column-highlight. Decoupled from
+// `lensMonth` so the chart opens clean — only a hover or an explicit bar
+// click sets a focused column (others dim to 0.3 alpha). Cleared on flyout
+// or full-page dismiss.
+let _focusedMonth = null;                 // YYYY-MM or null
+
 // Drill-down pie mode (only meaningful at parent scope; resets on scope change).
 let ddPieMode    = 'proportion';          // 'proportion' | 'composition'
 let _ddLastData  = null;                  // cached /api/category-detail payload (for cheap toggle re-render)
 let _ddLastColor = null;
+
+// Drill-down denominator for the proportion-mode headline + donut.
+// 'spend'  → % of total spend in the month (donut = category vs. rest of month spend)
+// 'income' → % of total income in the month (donut = category vs. rest of income)
+// Resets to 'spend' on persona switch and on every scope change.
+let ddDenomMode  = 'spend';
+let _incomeByMonth = null;                // { 'YYYY-MM': total_income, ... } — lazy
+let _incomeMapPromise = null;
 
 // Quick ranges only — the chart always renders monthly bars.
 const WINDOW_PRESETS = [
@@ -1161,11 +1131,13 @@ function setLensTimeframe(t) {
   if (drilldownActive()) renderDrillDown();
 }
 
-// The drill-down is "active" (and worth re-rendering) when it's on screen:
-// the side-by-side right pane (≥1024px) or an open flyout (narrow).
+// The drill-down is "active" (and worth re-rendering) when it's on screen —
+// i.e. the shared #cat-drilldown-section is currently parented into either the
+// right flyout or the full-page detail host.
 function drilldownActive() {
-  if (window.innerWidth >= 1024) return true;   // right pane is `lg:block`
-  return !!document.getElementById('cat-drilldown-section')?.closest('.mh-ios-flyout');
+  const host = document.getElementById('cat-drilldown-section');
+  if (!host) return false;
+  return !!(host.closest('.mh-ios-flyout') || host.closest('#habits-fullpage-host'));
 }
 
 // Setter for the focused month — highlights the column on the chart and updates
@@ -1179,10 +1151,12 @@ function setLensMonth(m) {
   if (drilldownActive()) renderDrillDown();
 }
 
-// Highlight the lensMonth column on the bar chart (others dim to 0.3 alpha).
-// Rewrites each bar dataset's backgroundColor to a per-bar array and applies a
-// no-animation update — no re-fetch / re-mount. No-op in radial mode or when no
-// chart exists yet. The compare overlay line (_noHighlight) is left untouched.
+// Highlight the focused-month column on the bar chart (others dim to 0.3
+// alpha). Default state is "no focus" — every bar renders lit. Hover and
+// explicit selection (bar click) are the only inputs that dim non-focused
+// bars; closing the drill-down clears the focus. The lens month (drives the
+// drill-down content) is deliberately NOT what triggers the dim — that lets
+// the chart open clean even though lensMonth always has a default value.
 function applyMonthHighlight(extraHover) {
   if (chartType !== 'bar') return;
   const chart = _charts['chart-monthly'];
@@ -1192,14 +1166,12 @@ function applyMonthHighlight(extraHover) {
   if (!periods.length || !datasets.length) return;
 
   // A column "has data" only when at least one bar dataset has non-zero spend
-  // at that index. Highlighting an empty column would dim every visible bar
-  // (e.g. lensMonth defaults to the current month, which has no data yet), so
-  // treat empty highlights as no-selection.
+  // at that index. Highlighting an empty column would dim every visible bar.
   const colHasData = i =>
     i >= 0 && i < periods.length &&
     datasets.some(ds => !ds._noHighlight && (Number(ds.data[i]) || 0) > 0);
 
-  const rawMonthIdx = lensMonth ? periods.indexOf(lensMonth) : -1;
+  const rawMonthIdx = _focusedMonth ? periods.indexOf(_focusedMonth) : -1;
   const monthIdx    = colHasData(rawMonthIdx) ? rawMonthIdx : -1;
   const hoverIdx    = (extraHover && extraHover.pointIdx != null && colHasData(extraHover.pointIdx))
     ? extraHover.pointIdx : -1;
@@ -1219,10 +1191,11 @@ function drillFlyoutTitle() {
   return lensMonth ? `${formatMonthLabel(lensMonth)} in detail` : 'In detail';
 }
 
-// Open the month drill-down as a right flyout (M11): re-parent the persistent
-// #cat-drilldown-section into the flyout, render into it, and move it back to its
-// hidden home (#habits-drilldown) on dismiss. Desktop pushes the chart pane to
-// 50% (compressTarget); mobile is full-screen.
+// Open the month drill-down as a right flyout: re-parent the persistent
+// #cat-drilldown-section into the flyout, render into it, and move it back to
+// its hidden home (#habits-drilldown) on dismiss. The flyout always overlays
+// (chart pane is never compressed) at every breakpoint. A second header
+// button (↗) hands the same content off to the full-page detail view.
 function openDrillDownFlyout() {
   if (!window.MoneyHabitsIOS) return;
   const host = document.getElementById('cat-drilldown-section');
@@ -1235,10 +1208,69 @@ function openDrillDownFlyout() {
       hideCjsTip();   // clear any tooltip stranded by tearing down the flyout charts
       const home = document.getElementById('habits-drilldown');
       if (home && host.parentElement !== home) home.appendChild(host);
+      // Closing the drill-down clears the bar-chart column highlight.
+      _focusedMonth = null;
+      applyMonthHighlight();
     },
+    onExpand: () => expandDrillDownToFullPage(host),
   });
   // Render after the flyout is in the DOM + sized so Chart.js lays out correctly.
   renderDrillDown();
+}
+
+// "Open as full page" handoff (Notion-style). Re-parents the drill-down
+// content into #habits-fullpage-host, hides the chart pane, shows the
+// breadcrumb header, and updates the URL hash so the back button works.
+function expandDrillDownToFullPage(host) {
+  const fullpage = document.getElementById('habits-fullpage');
+  const fullhost = document.getElementById('habits-fullpage-host');
+  const explorer = document.getElementById('habits-explorer');
+  const label    = document.getElementById('habits-fullpage-label');
+  if (!fullpage || !fullhost || !explorer) return;
+
+  if (host.parentElement !== fullhost) fullhost.appendChild(host);
+  explorer.classList.add('hidden');
+  fullpage.classList.remove('hidden');
+
+  // Page header swaps to the two-tier breadcrumb (eyebrow ‹ Habits + H1
+  // {scope} · {month}). setHabitsPageHeader delegates to the detail variant
+  // when #habits-fullpage is visible. The in-page #label strip is kept
+  // hidden — the header is now the breadcrumb.
+  setHabitsPageHeader();
+  if (label) label.textContent = '';
+
+  if (location.hash !== '#habits/detail') {
+    history.pushState({ tab: 'habits', view: 'detail' }, '', '#habits/detail');
+  }
+  // Re-render against the wider container so Chart.js picks up the new width.
+  renderDrillDown();
+}
+
+// Reverse of expand: re-home the drill-down content, restore the chart pane.
+function dismissFullPage({ updateHash = true } = {}) {
+  const fullpage = document.getElementById('habits-fullpage');
+  const explorer = document.getElementById('habits-explorer');
+  const host     = document.getElementById('cat-drilldown-section');
+  const home     = document.getElementById('habits-drilldown');
+  if (!fullpage || !explorer) return;
+  if (fullpage.classList.contains('hidden')) return;   // already dismissed
+
+  if (host && home && host.parentElement !== home) home.appendChild(host);
+  fullpage.classList.add('hidden');
+  explorer.classList.remove('hidden');
+  hideCjsTip();
+  // Closing the full-page detail also clears the bar-chart column highlight.
+  _focusedMonth = null;
+  applyMonthHighlight();
+
+  // Restore the regular Habits header + mobile sticky title.
+  setHabitsPageHeader();
+  const sticky = document.getElementById('sticky-title');
+  if (sticky) sticky.textContent = 'Habits';
+
+  if (updateHash && location.hash === '#habits/detail') {
+    history.replaceState({ tab: 'habits' }, '', '#habits');
+  }
 }
 
 // Page header (secondary nav) for the Habits tab — reads:
@@ -1246,7 +1278,18 @@ function openDrillDownFlyout() {
 // where the chip is an inline button. Clicking it opens #hc-chip-panel
 // (the category-tree dropdown). Subtitle is intentionally blank on Habits;
 // month + range live in the chart range picker / drill-down chip instead.
+// True iff the Habits full-page detail view is on screen — used by the page
+// header setter to swap to the breadcrumb variant.
+function inFullPageDetail() {
+  const fp = document.getElementById('habits-fullpage');
+  return !!(fp && !fp.classList.contains('hidden'));
+}
+
 function setHabitsPageHeader() {
+  // In the full-page detail view, render the two-tier breadcrumb instead of
+  // the standard "Your Habits for [chip]" header.
+  if (inFullPageDetail()) { setHabitsDetailHeader(); return; }
+
   const titleEl = document.getElementById('page-title');
   const subEl   = document.getElementById('page-subtitle');
   if (!titleEl || !subEl) return;
@@ -1293,6 +1336,40 @@ function setHabitsPageHeader() {
   });
 }
 
+// Two-tier breadcrumb header for the Habits full-page detail view. Replaces
+// the "Your Habits for [chip]" content while the full-page is on screen.
+//   eyebrow: ‹ Habits   (click → dismissFullPage)
+//   H1:      {scope} · {Month}
+function setHabitsDetailHeader() {
+  const titleEl = document.getElementById('page-title');
+  const subEl   = document.getElementById('page-subtitle');
+  if (!titleEl || !subEl) return;
+
+  const isAll = lensLevel === 'all';
+  const scope = isAll ? 'All Spending' : (lensCategory || 'Habits');
+  const monthLbl = lensMonth ? formatMonthLabel(lensMonth) : '';
+  const h1Text   = monthLbl ? `${scope} · ${monthLbl}` : scope;
+
+  titleEl.innerHTML =
+      `<button type="button" id="habits-detail-back"`
+    + ` class="inline-flex items-center gap-1 text-base font-semibold text-neutral-600 hover:text-neutral-800 mb-1 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-sm">`
+    + `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">`
+    + `<path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 0 1 0 1.06L9.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"/>`
+    + `</svg><span>Habits</span></button>`
+    + `<span class="block">${escHtml(h1Text)}</span>`;
+
+  subEl.innerHTML = '&nbsp;';
+
+  document.getElementById('habits-detail-back')?.addEventListener('click', () => {
+    dismissFullPage();
+  });
+
+  // Mobile sticky title carries the full breadcrumb so the scrolled state
+  // still reads where you are.
+  const sticky = document.getElementById('sticky-title');
+  if (sticky) sticky.textContent = `Habits / ${scope}`;
+}
+
 // Compare mode: dormant. UI removed (the right-rail Compare select is gone) but
 // the underlying state stays so the feature can be reintroduced later.
 function setLensCompare(m) {
@@ -1312,8 +1389,9 @@ function setLensScope({ level, category = '' }) {
   //   all    → keep whatever the user had last
   if (level === 'parent') lensChartView = 'stacked';
   if (level === 'leaf')   lensChartView = 'total';
-  // Pie mode resets to default on every scope change.
+  // Pie mode + denom mode reset to defaults on every scope change.
   ddPieMode = 'proportion';
+  ddDenomMode = 'spend';
   // Close the category chip dropdown if it was open.
   document.getElementById('hc-chip-panel')?.classList.add('hidden');
   // Scope change invalidates the radial year list (e.g. scoping into Food
@@ -1478,17 +1556,10 @@ async function initDashboard() {
   if (mq.addEventListener) mq.addEventListener('change', onMqChange);
   else                     mq.addListener(onMqChange);  // older Safari
 
-  // Reconcile the shared drill-down across the side-by-side ↔ flyout breakpoint
-  // (1024px). Crossing either way: close an open flyout (moves the content back
-  // to its home), then render into the now-visible right pane when going wide.
-  const mqWide = window.matchMedia('(min-width: 1024px)');
-  const onWideChange = () => {
-    if (window.MoneyHabitsIOS) MoneyHabitsIOS.closeRightFlyout?.();
-    hideCjsTip();
-    if (window.innerWidth >= 1024) renderDrillDown();
-  };
-  if (mqWide.addEventListener) mqWide.addEventListener('change', onWideChange);
-  else                        mqWide.addListener(onWideChange);
+  // Full-page detail breadcrumb back button — returns to the chart pane.
+  document.getElementById('habits-fullpage-back')?.addEventListener('click', () => {
+    dismissFullPage();
+  });
 
   // Year multi-select picker (radial mode only). Panel contents are built
   // lazily by renderHabitsRadial once we have the data.
@@ -1560,9 +1631,7 @@ async function initDashboard() {
     renderCategoryTree(),
     renderHabitsTrend(),
   ]);
-  // Side-by-side: render the right pane for the default month on load. On narrow
-  // viewports the drill-down stays closed until a bar click opens the flyout.
-  if (window.innerWidth >= 1024) renderDrillDown();
+  // Drill-down is flyout-only — no auto-render on mount; it opens on bar click.
 }
 
 function buildS1WindowPanel() {
@@ -1889,8 +1958,9 @@ async function renderHabitsChart() {
         }
         const monthKey = periods[index];
         if (monthKey) {
-          setLensMonth(monthKey);                                    // updates the wide right pane in place
-          if (window.innerWidth < 1024) openDrillDownFlyout();       // narrow: open the flyout
+          _focusedMonth = monthKey;   // persist the column highlight until the drill-down dismisses
+          setLensMonth(monthKey);
+          openDrillDownFlyout();      // drill-down is flyout-only at every breakpoint
         }
       },
       onHover: (evt, elements, ch) => {
@@ -2121,14 +2191,13 @@ async function renderHabitsRadial() {
       applyRadialHighlight(year);
     },
     onMonthLeave: () => { hideCustomTooltip(); applyRadialHighlight(); },
-    // Click a node → focus month (updates the wide pane) + toggle the pin;
-    // open the flyout only on narrow viewports.
+    // Click a node → focus month + toggle the pin + open the drill-down flyout.
     onMonthClick: ({ year, month }) => {
       const monthKey = `${year}-${String(month).padStart(2, '0')}`;
       radialHighlightYear = (radialHighlightYear === year) ? null : year;
       applyRadialHighlight();
       setLensMonth(monthKey);
-      if (window.innerWidth < 1024) openDrillDownFlyout();
+      openDrillDownFlyout();
     },
     // Legend swatch → pin toggle (no month chosen, so no drill-down nav).
     onYearClick: (year) => {
@@ -2312,6 +2381,21 @@ function loadCategoryMeta() {
   return _catMetaPromise;
 }
 
+// Lazy-load the per-persona monthly-income map so the drill-down spend↔income
+// toggle has a denominator ready. Cached for the session; reset cleanly via
+// resetAndReload() on persona switch (clears both vars before next fetch).
+function loadIncomeMap() {
+  if (_incomeByMonth) return Promise.resolve(_incomeByMonth);
+  if (_incomeMapPromise) return _incomeMapPromise;
+  _incomeMapPromise = fetchJsonCached('monthly-income.json')
+    .then(payload => {
+      _incomeByMonth = (payload && payload.months) || {};
+      return _incomeByMonth;
+    })
+    .catch(() => { _incomeByMonth = {}; return _incomeByMonth; });
+  return _incomeMapPromise;
+}
+
 function catSlug(catNorm) {
   if (!catNorm || catNorm === 'Uncategorized') return 'default';
   if (PARENT_SLUG[catNorm]) return PARENT_SLUG[catNorm];
@@ -2372,6 +2456,7 @@ function buildCategoriesTabUI() {
         <div class="col-span-1 md:col-span-2 bg-white border border-neutral-200 rounded-lg shadow-sm overflow-hidden flex flex-col">
           <div class="px-6 pt-6 pb-3 shrink-0 flex flex-col items-start gap-3">
             <p id="dd-pie-title" class="font-semibold text-xl text-neutral-900 leading-snug min-w-0"></p>
+            <p id="dd-pie-subtitle" class="text-sm text-neutral-600 leading-snug"></p>
             <div id="dd-pie-mode-toggle" role="group" aria-label="Pie chart view"
                  class="hidden rounded-lg border border-neutral-300 overflow-hidden text-xs shadow-sm shrink-0">
               <button data-pie-mode="proportion"  type="button" aria-pressed="true"
@@ -2455,6 +2540,10 @@ function syncCompareOptions() {
 // ── Drill-down (scope-aware) ──────────────────────────────────────────────────
 async function renderDrillDown() {
   if (!lensMonth) return;
+
+  // Income lookup powers the headline's spend↔income toggle. Fire-and-await
+  // so renderDdPie can read _incomeByMonth synchronously.
+  await loadIncomeMap();
 
   // Static tree: one file per scope, with every month keyed inside.
   const scopeFile = `category-detail-${scopeSlug(lensLevel, lensCategory)}.json`;
@@ -2567,6 +2656,9 @@ function renderDdPie(data, color) {
   let values = [];
   let colors = [];
   let titleText = '';
+  let titleHtml = '';
+  let subtitleText = '';
+  let denomPanelSpec = null;   // { incomeAvailable, monthLabel } in proportion mode; else null
 
   if (level === 'all') {
     titleText = `All spending in ${monthLabel}`;
@@ -2584,16 +2676,64 @@ function renderDdPie(data, color) {
       colors.push(derivedShade(catHex(data.category, 'mid'), idx, children.length));
     });
   } else {
-    // Proportion mode (parent and leaf share visuals).
-    titleText = `${data.category} was ${data.pct_of_total}% of your total spend in ${monthLabel}`;
-    const otherTotal = Math.max(0, (data.month_total || 0) - (data.total || 0));
+    // Proportion mode (parent and leaf share visuals). The denominator word
+    // ("spend"/"income") is a chip dropdown — clicking opens a panel with
+    // both options; selecting one flips ddDenomMode and re-renders from cache.
     const sliceColor = level === 'parent' ? catHex(data.category, 'mid') : color;
-    labels = [data.category, 'Rest of month'];
+    const income = _incomeByMonth ? (_incomeByMonth[data.year_month] || 0) : 0;
+    const incomeAvailable = income > 0;
+    const useIncome = ddDenomMode === 'income' && incomeAvailable;
+
+    let pct;
+    let denomWord;
+    let denomLabel;
+    let denomTotal;
+    let otherLabel;
+    let otherTotal;
+    if (useIncome) {
+      pct = Math.round((data.total || 0) / income * 1000) / 10;
+      denomWord = 'income';
+      denomLabel = 'Income';
+      denomTotal = income;
+      otherLabel = 'Rest of income';
+      otherTotal = Math.max(0, income - (data.total || 0));
+    } else {
+      pct = data.pct_of_total;
+      denomWord = 'spend';
+      denomLabel = 'Spend';
+      denomTotal = data.month_total || 0;
+      otherLabel = 'Rest of month';
+      otherTotal = Math.max(0, denomTotal - (data.total || 0));
+    }
+
+    const chevron = `<svg class="w-3.5 h-3.5 text-neutral-500 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"/></svg>`;
+    const denomChip = `<button id="dd-denom-btn" type="button" aria-haspopup="listbox" aria-expanded="false"`
+      + ` class="inline-flex items-center gap-1 px-1.5 py-0 -my-0.5 rounded-md text-neutral-900 hover:bg-neutral-100 focus:outline-none focus:ring-2 focus:ring-accent-700">`
+      + `<span class="underline decoration-solid underline-offset-2">${denomLabel.toLowerCase()}</span>${chevron}</button>`;
+    titleHtml = `${escHtml(data.category)} was ${pct}% of your total ${denomChip} in ${escHtml(monthLabel)}`;
+    titleText = '';   // unused in proportion mode — we set innerHTML below
+
+    // Supporting sentence: "You spent $X on CATEGORY out of $Y total spend/income in MONTH"
+    subtitleText = `You spent ${fmt(data.total || 0)} on ${data.category} out of ${fmt(denomTotal)} total ${denomWord} in ${monthLabel}`;
+    denomPanelSpec = { incomeAvailable, monthLabel };
+
+    labels = [data.category, otherLabel];
     values = [data.total, otherTotal];
     colors = [sliceColor, token('color-gray-100')];
   }
 
-  if (titleEl) titleEl.textContent = titleText;
+  if (titleEl) {
+    if (titleHtml) titleEl.innerHTML = titleHtml;
+    else           titleEl.textContent = titleText;
+  }
+  // Supporting sentence below the headline — only in proportion mode.
+  const subtitleEl = document.getElementById('dd-pie-subtitle');
+  if (subtitleEl) {
+    if (subtitleText) { subtitleEl.textContent = subtitleText; subtitleEl.classList.remove('hidden'); }
+    else              { subtitleEl.textContent = ''; subtitleEl.classList.add('hidden'); }
+  }
+  // Wire the spend / income dropdown — only present in proportion mode.
+  if (denomPanelSpec) wireDdDenomDropdown(denomPanelSpec);
 
   // Clear any leftover placeholder (from a prior empty-state render) so
   // getChartCanvas can create a fresh canvas.
@@ -2662,12 +2802,94 @@ function cjsTipPie(ctx) {
   const total = allValues.reduce((a, b) => a + (b || 0), 0);
   const pct = total > 0 ? Math.round((dp.parsed / total) * 100) : 0;
   const monthLabel = lensMonth ? formatMonthLabel(lensMonth) : '';
-  const meta = monthLabel ? `${pct}% of Total ${monthLabel} Spend` : `${pct}% of Total Spend`;
+  const denomLabel = (ddDenomMode === 'income') ? 'Income' : 'Spend';
+  const meta = monthLabel ? `${pct}% of Total ${monthLabel} ${denomLabel}` : `${pct}% of Total ${denomLabel}`;
 
   if (sliceLabel === 'Rest of month') return { title: 'Rest of month', meta, value };
   if (sliceLabel === 'Other')        return { accentSlug: 'default', title: 'Other', meta, value };
   return { accentSlug: catSlug(sliceLabel), title: tipCatBadge(sliceLabel), meta, value };
 }
+
+// Build + anchor the Spend/Income dropdown attached to the headline chip
+// (#dd-denom-btn). Re-runs every renderDdPie so the active option highlight +
+// disabled-state for the Income row tracks the current month's income data.
+function wireDdDenomDropdown({ incomeAvailable, monthLabel }) {
+  const btn = document.getElementById('dd-denom-btn');
+  if (!btn) return;
+  // Anchor the panel as a sibling of the trigger so absolute positioning
+  // works against a `position: relative` wrapper — wrap the button on first
+  // render if it doesn't already have one.
+  if (!btn.parentElement.classList.contains('dd-denom-wrap')) {
+    const wrap = document.createElement('span');
+    wrap.className = 'dd-denom-wrap relative inline-block align-baseline';
+    btn.parentElement.insertBefore(wrap, btn);
+    wrap.appendChild(btn);
+  }
+  const wrap = btn.parentElement;
+
+  let panel = wrap.querySelector('.dd-denom-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'dd-denom-panel hidden absolute z-30 mt-1 min-w-[10rem] bg-white border border-neutral-200 rounded-xl shadow-lg py-1';
+    wrap.appendChild(panel);
+  }
+
+  const isIncome = ddDenomMode === 'income' && incomeAvailable;
+  const rowClass = (active) => [
+    'flex items-center gap-2 w-full text-left text-sm px-3 py-1.5 whitespace-nowrap',
+    active ? 'bg-neutral-100 text-neutral-900 font-semibold' : 'text-neutral-700 hover:bg-neutral-50',
+  ].join(' ');
+  const checkSvg = `<svg class="w-4 h-4 text-accent-700" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M16.7 5.3a1 1 0 0 1 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L8 12.6l7.3-7.3a1 1 0 0 1 1.4 0Z"/></svg>`;
+  const dot = `<span class="w-4 h-4 inline-block" aria-hidden="true"></span>`;
+
+  const incomeDisabled = !incomeAvailable;
+  panel.innerHTML = `
+    <button type="button" data-denom="spend" class="${rowClass(!isIncome)}">
+      ${!isIncome ? checkSvg : dot}<span>Spend</span>
+    </button>
+    <button type="button" data-denom="income" class="${rowClass(isIncome)}${incomeDisabled ? ' opacity-50 cursor-not-allowed' : ''}"
+      ${incomeDisabled ? `aria-disabled="true" title="No income recorded in ${escHtml(monthLabel)}"` : ''}>
+      ${isIncome ? checkSvg : dot}<span>Income</span>
+    </button>
+  `;
+
+  panel.querySelectorAll('button[data-denom]').forEach(opt => {
+    opt.addEventListener('click', e => {
+      e.stopPropagation();
+      if (opt.getAttribute('aria-disabled') === 'true') return;
+      const next = opt.dataset.denom;
+      panel.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+      if (next !== ddDenomMode) {
+        ddDenomMode = next;
+        if (_ddLastData) renderDdPie(_ddLastData, _ddLastColor);
+      }
+    });
+  });
+
+  // Each render mints a fresh #dd-denom-btn (innerHTML replaces titleEl), so we
+  // always (re-)attach the toggle handler. Outside-click dismiss is delegated
+  // to a single permanent listener installed below.
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const open = !panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', open);
+    btn.setAttribute('aria-expanded', open ? 'false' : 'true');
+  });
+
+  if (!_ddDenomOutsideClickWired) {
+    _ddDenomOutsideClickWired = true;
+    document.addEventListener('click', e => {
+      document.querySelectorAll('.dd-denom-panel:not(.hidden)').forEach(p => {
+        if (!p.parentElement.contains(e.target)) {
+          p.classList.add('hidden');
+          p.parentElement.querySelector('#dd-denom-btn')?.setAttribute('aria-expanded', 'false');
+        }
+      });
+    });
+  }
+}
+let _ddDenomOutsideClickWired = false;
 
 // Show/hide and style the Proportion/Composition toggle. `level` is the
 // current scope; `childCount` is how many children of the active parent have
@@ -3618,19 +3840,23 @@ function escHtml(str) {
 // stays put — the user remains on the tab they were on.
 async function resetAndReload() {
   // 1. Clear infra caches: HTTP JSON, Chart.js instances, the mobile scroll
-  // listener, any stranded tooltips.
+  // listener, any stranded tooltips. Also drop the Habits full-page detail
+  // back to the chart pane so the new persona starts in a clean state.
   clearJsonCache();
   for (const id in _charts) _charts[id]?.destroy();
   for (const id in _charts) delete _charts[id];
   if (_largeTitleCleanup) { _largeTitleCleanup(); _largeTitleCleanup = null; }
   hideCustomTooltip(); hideCjsTip();
+  dismissFullPage({ updateHash: false });
 
   // 2. Reset per-tab module state to v2 defaults.
-  overviewInited = false; overviewSnapshot = null; overviewMonths = []; overviewOverlay = false;
+  overviewInited = false; overviewSnapshot = null; overviewMonths = [];
   lensMonth = ''; lensCategory = ''; lensCompare = ''; lensTimeframe = 'last-12-months';
+  _focusedMonth = null;
   lensLevel = 'all'; lensChartView = 'total';
   chartType = 'bar'; radialYears = new Set(); radialHighlightYear = null;
   ddPieMode = 'proportion'; _ddLastData = null; _ddLastColor = null;
+  ddDenomMode = 'spend'; _incomeByMonth = null; _incomeMapPromise = null;
   _radialDataCache = null; _radialDataKey = '';
   _catMeta = null; _catMetaPromise = null;
   habitsInited = false;
@@ -3804,6 +4030,31 @@ if (!window.__CHART_PLAYGROUND__) {
   history.replaceState({ tab: initialTab }, '', '#' + initialTab);
   showTab(initialTab, { updateHash: false });
   initProfileSwitcher();
+  initRailCollapse();
   _bumpVisitCount();
   maybeShowInstallBanner();
+}
+
+// Side-rail collapse — read persisted state, apply to #side-rail, wire toggle.
+// Per-device preference; localStorage key RAIL_COLLAPSED_KEY. The rail is
+// hidden on mobile (`md:flex`), so this is desktop-only in practice.
+function initRailCollapse() {
+  const rail = document.getElementById('side-rail');
+  const btn  = document.getElementById('rail-collapse-btn');
+  if (!rail || !btn) return;
+
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(RAIL_COLLAPSED_KEY) === 'true'; } catch (e) {}
+  applyRailCollapsed(rail, btn, collapsed);
+
+  btn.addEventListener('click', () => {
+    const next = rail.getAttribute('data-collapsed') !== 'true';
+    applyRailCollapsed(rail, btn, next);
+    try { localStorage.setItem(RAIL_COLLAPSED_KEY, String(next)); } catch (e) {}
+  });
+}
+
+function applyRailCollapsed(rail, btn, collapsed) {
+  rail.setAttribute('data-collapsed', collapsed ? 'true' : 'false');
+  btn.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
 }
