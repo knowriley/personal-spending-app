@@ -2,8 +2,34 @@
 <html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>MoneyHabits</title>
+
+  <!-- ── PWA chrome ──────────────────────────────────────────────────────────
+       Wire the manifest + carry the indigo brand color through every channel
+       that controls how the installed app looks on the home screen / address
+       bar. iOS in particular ignores the manifest's icons/theme — the
+       apple-touch-icon + apple-mobile-web-app-* tags below are what drive the
+       home-screen tile, splash, and status bar. The icons are baked with an
+       indigo (#4338ca) background; the meta theme-color matches so the
+       Android tile + browser chrome render in brand. -->
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#4338ca" />
+
+  <!-- Favicons (browser tab + bookmarks) -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16.png" />
+  <link rel="shortcut icon" href="/static/icons/favicon.ico" />
+
+  <!-- iOS home-screen / standalone -->
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png" />
+  <link rel="apple-touch-icon" sizes="167x167" href="/static/icons/icon-167.png" />
+  <link rel="apple-touch-icon" sizes="152x152" href="/static/icons/icon-152.png" />
+  <link rel="apple-touch-icon" sizes="120x120" href="/static/icons/icon-120.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="MoneyHabits" />
 
   <!-- Tailwind CSS (built locally) -->
   <link rel="stylesheet" href="/static/css/tailwind.css" />

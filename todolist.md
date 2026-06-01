@@ -6,7 +6,12 @@ for each lives in `~/.claude/plans/purrfect-strolling-muffin.md`
 
 | Added | Item | Notes |
 |---|---|---|
-| 2026-05-29 | **Transactions: month-header total (right-aligned)** | Sum of the (filtered) rows in each month group rendered on the right of the existing `April 2026 · 4 transactions matching …` header. Plan: aggregate from `getFilteredTransactions()` before `groupByMonth()`; flex layout in the header. |
-| 2026-05-29 | **Lingering tooltips bug** | Chart.js + custom DOM tooltips don't reliably dismiss after pointer-leave / chart teardown / flyout open-close. Triage `hideCjsTip()` / `hideCustomTooltip()` call sites and missing pointerout/blur listeners. |
-| 2026-05-29 | **PWA home-screen icon not in brand purple** | Installed PWA tile renders in default OS color instead of indigo. Inspect `manifest.json` (`theme_color`, `background_color`), maskable icon set, HTML `<meta name="theme-color">`, and iOS apple-touch-icon variants. |
-| 2026-05-29 | **Transaction metadata: `spend_type` (fixed/variable) + `budget_bucket` (needs / wants / savings-loans)** | Two new per-transaction tags inherited from category. Proposed `CATEGORY_TAGS` mapping table is in the plan file with spend history per persona — awaiting user review before implementation. Build step would surface tags inside `transactions.json` + `category-detail-*.json`; drill-down headline gets a chip pair, Transactions tab gets matching filters. |
+
+*(empty — all queued items shipped on 2026-06-01)*
+
+## Shipped 2026-06-01
+
+- **Transactions: month-header total** — filtered sum on the right of each `April 2026 · 4 transactions` header.
+- **Lingering tooltips bug** — added `hideAllTooltips()` helper + plugged the strand points (chart teardown, flyout open/close/expand/dismiss, chart-type switch, tab switch, page blur/visibility/scroll).
+- **PWA home-screen icon not in brand purple** — `base.html` was missing every PWA meta tag; added `<link rel="manifest">`, `<meta name="theme-color" content="#4338ca">`, `apple-touch-icon` × 4 sizes, the `apple-mobile-web-app-*` flags, and favicon links. (Existing home-screen installs need to be re-added to pick up the new tile.)
+- **Transaction metadata: `spend_type` + `budget_bucket`** — `CATEGORY_TAGS` map in `data_processor.py`; tags ride on every `transactions.json` row and on leaf-scope `category-detail-*.json` payloads; drill-down chip pair + two new Transactions tab filters wired.

@@ -146,7 +146,7 @@
       <input id="txn-search" type="text" placeholder="Search merchant…"
         class="flex-1 md:flex-none md:w-64 text-sm border border-neutral-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-accent-700" />
 
-      <div id="txn-filter-controls" class="hidden md:flex md:items-center md:gap-3">
+      <div id="txn-filter-controls" class="hidden md:flex md:items-center md:gap-3 md:flex-wrap">
         <label for="txn-cat-filter" class="sr-only">Filter by category</label>
         <select id="txn-cat-filter"
           class="text-sm border border-neutral-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-accent-700">
@@ -155,6 +155,21 @@
         <label for="txn-month-filter" class="sr-only">Filter by month</label>
         <input id="txn-month-filter" type="month"
           class="text-sm border border-neutral-200 rounded-lg px-3 py-2 bg-white text-neutral-900 focus:outline-none focus:ring-2 focus:ring-accent-700" />
+        <label for="txn-type-filter" class="sr-only">Filter by spend type</label>
+        <select id="txn-type-filter"
+          class="text-sm border border-neutral-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-accent-700">
+          <option value="">All types</option>
+          <option value="fixed">Fixed</option>
+          <option value="variable">Variable</option>
+        </select>
+        <label for="txn-bucket-filter" class="sr-only">Filter by budget bucket</label>
+        <select id="txn-bucket-filter"
+          class="text-sm border border-neutral-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-accent-700">
+          <option value="">All buckets</option>
+          <option value="needs">Needs</option>
+          <option value="wants">Wants</option>
+          <option value="savings_loans">Savings / Loans</option>
+        </select>
       </div>
 
       <button id="txn-filter-btn" type="button"

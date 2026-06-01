@@ -211,6 +211,9 @@ function mountChart(containerId, config) {
   return _charts[containerId];
 }
 function destroyChart(containerId) {
+  // Chart.js doesn't fire a mouseout/external(opacity=0) on destroy — so any
+  // tooltip showing for THIS chart at teardown time would be stranded.
+  hideAllTooltips();
   _charts[containerId]?.destroy();
   delete _charts[containerId];
 }
@@ -241,6 +244,13 @@ function makeTipExternal(buildSpec) {
 function hideCjsTip() {
   (makeTipExternal._el ??= document.getElementById('cjs-tip'))?.classList.add('hidden');
 }
+
+// Unified clear — hides both the Chart.js native tooltip (#cjs-tip) and the
+// custom DOM tooltip (#ct-tip used by the SVG radial). Call at every state
+// transition that can strand a tooltip: chart teardown, chart-type switch,
+// tab switch, flyout open/close, expand/dismiss of the full-page detail,
+// page visibility change.
+function hideAllTooltips() { hideCjsTip(); hideCustomTooltip(); }
 
 // Same flip logic as positionCustomTooltip, but driven by explicit viewport
 // coords (the Chart.js caret) rather than a mouse event.
@@ -283,6 +293,9 @@ function tabFromHash() {
 
 function showTab(name, opts = {}) {
   activeTab = name;
+  // Clear any tooltip stranded from the prior tab's hover state — Chart.js
+  // doesn't fire mouseout when its canvas is just hidden via display:none.
+  hideAllTooltips();
   // Close the Habits page-header chip dropdown on any tab change so leaving
   // Habits with the panel open doesn't leave it visible elsewhere.
   document.getElementById('hc-chip-panel')?.classList.add('hidden');
@@ -370,6 +383,19 @@ window.addEventListener('popstate', e => {
 // Wire the large-title scroll-shrink to the current breakpoint, re-wiring on change.
 syncHeaderScroll();
 window.matchMedia('(min-width: 768px)').addEventListener('change', syncHeaderScroll);
+
+// Global tooltip-clear safety net. Chart.js + the custom DOM tooltip both
+// rely on per-element mouse events; when the pointer leaves the document, the
+// page goes background, or focus is lost, no mouseout fires for the element
+// underneath — so the tooltip can linger. Hide on all three.
+window.addEventListener('blur',     hideAllTooltips);
+document.addEventListener('mouseleave', hideAllTooltips);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') hideAllTooltips();
+});
+// Scroll the app container → cursor's old position is now over a different
+// element; any tooltip from before the scroll is misplaced and should clear.
+document.getElementById('app-scroll')?.addEventListener('scroll', hideAllTooltips, { passive: true });
 
 
 // ── Dropdown a11y helper ─────────────────────────────────────────────────────
@@ -1200,12 +1226,15 @@ function openDrillDownFlyout() {
   if (!window.MoneyHabitsIOS) return;
   const host = document.getElementById('cat-drilldown-section');
   if (!host) return;
+  // The opening click came from a chart bar/node — clear any tooltip that
+  // was showing for that hovered element before the flyout overlays it.
+  hideAllTooltips();
   MoneyHabitsIOS.openRightFlyout({
     title: drillFlyoutTitle(),
     content: host,
     compressTarget: document.getElementById('habits-explorer'),
     onDismiss: () => {
-      hideCjsTip();   // clear any tooltip stranded by tearing down the flyout charts
+      hideAllTooltips();   // clear anything stranded by tearing down the flyout's charts
       const home = document.getElementById('habits-drilldown');
       if (home && host.parentElement !== home) home.appendChild(host);
       // Closing the drill-down clears the bar-chart column highlight.
@@ -1227,6 +1256,7 @@ function expandDrillDownToFullPage(host) {
   const explorer = document.getElementById('habits-explorer');
   const label    = document.getElementById('habits-fullpage-label');
   if (!fullpage || !fullhost || !explorer) return;
+  hideAllTooltips();
 
   if (host.parentElement !== fullhost) fullhost.appendChild(host);
   explorer.classList.add('hidden');
@@ -1258,7 +1288,7 @@ function dismissFullPage({ updateHash = true } = {}) {
   if (host && home && host.parentElement !== home) home.appendChild(host);
   fullpage.classList.add('hidden');
   explorer.classList.remove('hidden');
-  hideCjsTip();
+  hideAllTooltips();
   // Closing the full-page detail also clears the bar-chart column highlight.
   _focusedMonth = null;
   applyMonthHighlight();
@@ -1754,7 +1784,7 @@ function setChartType(t) {
   if (t !== 'bar' && t !== 'radial') return;
   if (t === chartType) return;
   chartType = t;
-  hideCustomTooltip();
+  hideAllTooltips();   // both: the prior chart could've been either kind
   syncChartTypeUI();
   renderHabitsTrend();
 }
@@ -2441,12 +2471,14 @@ function buildCategoriesTabUI() {
     <div id="dd-inner" class="bg-white border border-neutral-200 rounded-lg p-6 flex flex-col gap-6">
 
       <!-- Header — category identity + the focused month (side-by-side has no
-           flyout title, so the month label lives here). -->
+           flyout title, so the month label lives here). The budget-tag chip
+           pair (spend_type · budget_bucket) shows on leaf scope only. -->
       <div class="flex items-center gap-3 min-w-0">
         <span id="dd-color-dot" class="w-10 h-10 rounded-full flex-none inline-flex items-center justify-center text-xl"></span>
         <div class="min-w-0">
           <h3 id="dd-cat-name" class="font-bold text-2xl text-neutral-500 truncate leading-tight"></h3>
           <p id="dd-month-heading" class="text-sm text-neutral-500"></p>
+          <div id="dd-budget-tags" class="hidden mt-2 flex items-center gap-1.5"></div>
         </div>
       </div>
 
@@ -2593,6 +2625,9 @@ function renderDrillDownView(data, compareData) {
   document.getElementById('dd-cat-name').textContent = headerName;
   const ddMonthHeading = document.getElementById('dd-month-heading');
   if (ddMonthHeading) ddMonthHeading.textContent = `${monthLabel} in detail`;
+
+  // Budget tags (spend_type · budget_bucket) — leaf scope only.
+  renderDdBudgetTags(data.spend_type, data.budget_bucket);
 
   // Locations card title swaps by scope.
   const locTitle = document.getElementById('dd-locations-title');
@@ -3024,6 +3059,34 @@ function renderDdQuickStats(data, prevData) {
     `;
     container.appendChild(card);
   });
+}
+
+// Pretty labels for the two budget tags (keys come from the data layer).
+const SPEND_TYPE_LABEL    = { fixed: 'Fixed', variable: 'Variable' };
+const BUDGET_BUCKET_LABEL = { needs: 'Need', wants: 'Want', savings_loans: 'Savings / Loans' };
+
+// Tailwind-class helpers for the chip pair. Soft tinted background + bordered;
+// colors echo the utility palette without inventing new tokens. Hidden when
+// no tag is present (parent/all scope) or when called with falsy values.
+function renderDdBudgetTags(spendType, budgetBucket) {
+  const wrap = document.getElementById('dd-budget-tags');
+  if (!wrap) return;
+  if (!spendType && !budgetBucket) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
+
+  const pill = (text, cls) =>
+    `<span class="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full border ${cls}">${escHtml(text)}</span>`;
+
+  const stCls = spendType === 'fixed'
+    ? 'bg-neutral-100 text-neutral-700 border-neutral-200'
+    : 'bg-accent-50 text-accent-700 border-accent-100';
+  const bbCls = budgetBucket === 'needs'        ? 'bg-utility-green-50 text-utility-green-700 border-utility-green-100'
+              : budgetBucket === 'wants'        ? 'bg-utility-red-50 text-utility-red-700 border-utility-red-100'
+              : /* savings_loans */               'bg-accent-50 text-accent-700 border-accent-100';
+
+  wrap.innerHTML = (spendType    ? pill(SPEND_TYPE_LABEL[spendType]   || spendType,    stCls) : '')
+                 + (budgetBucket ? pill(BUDGET_BUCKET_LABEL[budgetBucket] || budgetBucket, bbCls) : '');
+  wrap.classList.remove('hidden');
+  wrap.classList.add('flex');
 }
 
 function renderDdLocations(locations, color, level = 'leaf') {
@@ -3526,6 +3589,8 @@ async function renderTransactionsTab() {
     document.getElementById('txn-search').addEventListener('input', debounce(onFilterChange, 100));
     catSel.addEventListener('change', onFilterChange);
     document.getElementById('txn-month-filter').addEventListener('change', onFilterChange);
+    document.getElementById('txn-type-filter').addEventListener('change', onFilterChange);
+    document.getElementById('txn-bucket-filter').addEventListener('change', onFilterChange);
     document.getElementById('txn-filter-btn').addEventListener('click', openTxnFilterSheet);
 
     txnInited = true;
@@ -3534,9 +3599,11 @@ async function renderTransactionsTab() {
   // Apply nav state from Overview-tab linkouts (client-side filters now).
   const nav = window.moneyHabitsNav;
   if (nav && nav.tab === 'transactions') {
-    document.getElementById('txn-search').value       = '';
-    document.getElementById('txn-cat-filter').value   = '';
-    document.getElementById('txn-month-filter').value = nav.year_month || '';
+    document.getElementById('txn-search').value        = '';
+    document.getElementById('txn-cat-filter').value    = '';
+    document.getElementById('txn-month-filter').value  = nav.year_month || '';
+    document.getElementById('txn-type-filter').value   = '';
+    document.getElementById('txn-bucket-filter').value = '';
     txnVisibleMonths = 3;
     txnDayRange = (nav.start_day != null && nav.end_day != null)
       ? { start_day: nav.start_day, end_day: nav.end_day }
@@ -3561,10 +3628,14 @@ function getFilteredTransactions() {
   const search = (document.getElementById('txn-search')?.value || '').trim().toLowerCase();
   const cat    = document.getElementById('txn-cat-filter')?.value || '';
   const month  = document.getElementById('txn-month-filter')?.value || '';
+  const stype  = document.getElementById('txn-type-filter')?.value || '';
+  const bucket = document.getElementById('txn-bucket-filter')?.value || '';
   let rows = _allTransactions || [];
   if (search) rows = rows.filter(t => (t.name || '').toLowerCase().includes(search));
   if (cat)    rows = rows.filter(t => t.category === cat);
   if (month)  rows = rows.filter(t => t.date.slice(0, 7) === month);
+  if (stype)  rows = rows.filter(t => t.spend_type === stype);
+  if (bucket) rows = rows.filter(t => t.budget_bucket === bucket);
   if (txnDayRange) rows = rows.filter(t => {
     const d = parseInt(t.date.slice(8, 10), 10);
     return d >= txnDayRange.start_day && d <= txnDayRange.end_day;
@@ -3622,10 +3693,16 @@ function monthGroupHTML({ ym, rows }, search) {
   const count = search
     ? `${n} transaction${n !== 1 ? 's' : ''} matching "${escHtml(search)}"`
     : `${n} transaction${n !== 1 ? 's' : ''}`;
+  // Total reflects only the rows in this group after filters apply — matches
+  // the "N transactions matching" semantics on the left.
+  const total = rows.reduce((s, t) => s + (Number(t.amount) || 0), 0);
   return `
     <div class="mb-8">
-      <h3 class="text-base font-semibold text-neutral-600 px-1 pt-2 pb-3">
-        ${escHtml(formatMonthLabel(ym))} <span class="text-neutral-400 font-normal">· ${count}</span>
+      <h3 class="flex items-baseline gap-3 px-1 pt-2 pb-3">
+        <span class="text-base font-semibold text-neutral-600">
+          ${escHtml(formatMonthLabel(ym))} <span class="text-neutral-400 font-normal">· ${count}</span>
+        </span>
+        <span class="ml-auto text-base font-semibold tabular-nums text-neutral-900">${fmt(total)}</span>
       </h3>
       <div class="bg-white rounded-lg border border-neutral-200 overflow-hidden divide-y divide-neutral-100">
         ${rows.map(txnRowHTML).join('')}
@@ -3663,8 +3740,10 @@ function txnRowHTML(t) {
 // Count of active sheet filters (category + month; search is always visible).
 function txnActiveFilterCount() {
   let n = 0;
-  if (document.getElementById('txn-cat-filter')?.value)   n++;
-  if (document.getElementById('txn-month-filter')?.value) n++;
+  if (document.getElementById('txn-cat-filter')?.value)    n++;
+  if (document.getElementById('txn-month-filter')?.value)  n++;
+  if (document.getElementById('txn-type-filter')?.value)   n++;
+  if (document.getElementById('txn-bucket-filter')?.value) n++;
   return n;
 }
 function updateTxnFilterBadge() {
@@ -3699,6 +3778,8 @@ function openTxnFilterSheet() {
     document.getElementById('txn-search').value = '';
     document.getElementById('txn-cat-filter').value = '';
     document.getElementById('txn-month-filter').value = '';
+    document.getElementById('txn-type-filter').value = '';
+    document.getElementById('txn-bucket-filter').value = '';
     txnDayRange = null;
     txnVisibleMonths = 3;
     updateTxnFilterBadge();

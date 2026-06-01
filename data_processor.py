@@ -46,6 +46,56 @@ def list_datasets() -> list:
     ]
 
 
+# ── Per-category budget tags ────────────────────────────────────────────────
+# Two tags inherited from each transaction's leaf category:
+#   spend_type:    'fixed'   = recurring, predictable amount/timing
+#                  'variable'= amount fluctuates with use
+#   budget_bucket: 'needs' | 'wants' | 'savings_loans' — classic 50/30/20 split
+# Unmapped categories fall back to ('variable', 'wants') — the safest catch-all
+# for discretionary spend; per-transaction overrides would be a future feature.
+CATEGORY_TAGS: dict[str, tuple[str, str]] = {
+    'Rent':              ('fixed',    'needs'),
+    'Student Loan':      ('fixed',    'savings_loans'),
+    'Groceries':         ('variable', 'needs'),
+    'Restaurants':       ('variable', 'wants'),
+    'Fast Food':         ('variable', 'wants'),
+    'Bars':              ('variable', 'wants'),
+    'Cafés':             ('variable', 'wants'),
+    'Brunch':            ('variable', 'wants'),
+    'Food Delivery':     ('variable', 'wants'),
+    'Train':             ('variable', 'needs'),
+    'Transit':           ('variable', 'needs'),
+    'Uber':              ('variable', 'wants'),
+    'Rideshare':         ('variable', 'wants'),
+    'Flights':           ('variable', 'wants'),
+    'London Expenses':   ('variable', 'wants'),
+    'Gas & Electric':    ('variable', 'needs'),
+    'Internet':          ('fixed',    'needs'),
+    'Phone':             ('fixed',    'needs'),
+    'Subscriptions':     ('fixed',    'wants'),
+    'Gym Membership':    ('fixed',    'wants'),
+    'Fitness Classes':   ('variable', 'wants'),
+    'Pharmacy':          ('variable', 'needs'),
+    'Healthcare':        ('variable', 'needs'),
+    'Personal Care':     ('variable', 'needs'),
+    'Laundry':           ('variable', 'needs'),
+    'Nails':             ('variable', 'wants'),
+    'Clothing':          ('variable', 'wants'),
+    'Shops':             ('variable', 'wants'),
+    'General Shopping':  ('variable', 'wants'),
+    'Entertainment':     ('variable', 'wants'),
+    'Venmo Social':      ('variable', 'wants'),
+    'Other':             ('variable', 'wants'),
+}
+_DEFAULT_TAGS = ('variable', 'wants')
+
+
+def tag_for(category: Optional[str]) -> dict:
+    """Return {spend_type, budget_bucket} for a leaf category. Unmapped → default."""
+    spend_type, budget_bucket = CATEGORY_TAGS.get((category or "").strip(), _DEFAULT_TAGS)
+    return {'spend_type': spend_type, 'budget_bucket': budget_bucket}
+
+
 def _csv_path() -> Path:
     return Path(__file__).parent / DATASETS[get_active_dataset()]["path"]
 
@@ -314,6 +364,9 @@ def transactions_all() -> list[dict]:
     rows["date"] = rows["date"].dt.strftime("%Y-%m-%d")
     rows["amount"] = rows["amount"].round(2)
     rows["parent_category"] = rows["parent_category"].map(_parent_or_none)
+    # Budget tags inherited from the leaf category.
+    rows["spend_type"]    = rows["category_norm"].map(lambda c: tag_for(c)['spend_type'])
+    rows["budget_bucket"] = rows["category_norm"].map(lambda c: tag_for(c)['budget_bucket'])
     rows = rows.rename(columns={"category_norm": "category", "parent_category": "parent"})
     return rows.to_dict(orient="records")
 
@@ -587,6 +640,11 @@ def get_category_detail(category: str, year_month: str, level: str = "leaf") -> 
     txns['amount'] = txns['amount'].round(2)
     txns = txns.rename(columns={'category_norm': 'category'})
 
+    # Budget tags are inherited from the leaf category, so they're only well-
+    # defined at level='leaf'. Parent/all scopes leave them None (frontend
+    # hides the chip pair in those cases).
+    tags = tag_for(category) if level == 'leaf' else {'spend_type': None, 'budget_bucket': None}
+
     return {
         'category':          scope_label,
         'level':             level,
@@ -597,6 +655,8 @@ def get_category_detail(category: str, year_month: str, level: str = "leaf") -> 
         'transaction_count': txn_count,
         'avg_transaction':   avg_txn,
         'most_frequent_dow': most_freq_dow,
+        'spend_type':        tags['spend_type'],
+        'budget_bucket':     tags['budget_bucket'],
         'top_locations':     top_locations,
         'top_merchants':     top_merchants,
         'by_child':          by_child,
