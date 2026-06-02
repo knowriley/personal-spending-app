@@ -63,7 +63,7 @@ BUILD_HASH = _compute_build_hash()
 # Absolute origin URL. Required for og:image and og:url (relative URLs
 # don't resolve in iMessage/Slack link-preview contexts). Render's env var
 # wins; the default matches the current production hostname.
-DEPLOY_URL = os.environ.get("DEPLOY_URL", "https://personal-spending-app-2.onrender.com")
+DEPLOY_URL = os.environ.get("DEPLOY_URL", "https://personal-spending-app.onrender.com")
 
 # Timeframes that drive /api/summary's avg_start/avg_end. Mirrors the
 # v1 frontend's dateRangeFor() helper.
