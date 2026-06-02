@@ -1014,14 +1014,19 @@ function renderOverviewLineChart(snap) {
 }
 
 // Overview cumulative tooltip spec — "This month" shows the bare value; the muted
-// "Last month" overlay is labeled inline.
+// "Last month" overlay is labeled inline. Title uses the actual month name +
+// day (e.g. "March 14") for the hovered series; sourced from overviewSnapshot.
 function cjsTipOverviewCumul(ctx) {
   const dp = ctx.tooltip.dataPoints?.[0];
   if (!dp) return null;
   const isThis = dp.dataset.label === 'This month';
   const value = fmt(dp.parsed.y || 0);
+  const ym = overviewSnapshot
+    ? (isThis ? overviewSnapshot.month : prevMonthOf(overviewSnapshot.month))
+    : null;
+  const monthName = ym ? formatMonthLabel(ym).split(' ')[0] : '';
   return {
-    title: `Day ${dp.label}`,
+    title: monthName ? `${monthName} ${dp.label}` : `${dp.label}`,
     meta: dp.dataset.label || '',
     value: isThis ? value : `Last month: ${value}`,
   };
@@ -1166,6 +1171,13 @@ function drilldownActive() {
   return !!(host.closest('.mh-ios-flyout') || host.closest('#habits-fullpage-host'));
 }
 
+// True iff the drill-down is currently in the full-page detail view (not the
+// flyout). Used to gate interactive bubble↔table hover-highlighting, which
+// only fires in the larger full-page layout.
+function inFullPageHost() {
+  return !!document.getElementById('cat-drilldown-section')?.closest('#habits-fullpage-host');
+}
+
 // Setter for the focused month — highlights the column on the chart and updates
 // the drill-down in place when it's showing (the wide right pane, or open flyout).
 function setLensMonth(m) {
@@ -1212,9 +1224,14 @@ function applyMonthHighlight(extraHover) {
   chart.update('none');
 }
 
-// Flyout title — the focused month (the in-flyout header carries the scope name).
+// Flyout title — carries the active scope + focused month, since the in-pane
+// identity row was removed in favor of a single source of truth for that text.
+//   leaf / parent: "Cafés · March 2026"
+//   all:           "All Spending · March 2026"
 function drillFlyoutTitle() {
-  return lensMonth ? `${formatMonthLabel(lensMonth)} in detail` : 'In detail';
+  const scope = lensLevel === 'all' ? 'All Spending' : (lensCategory || 'In detail');
+  if (!lensMonth) return scope;
+  return `${scope} · ${formatMonthLabel(lensMonth)}`;
 }
 
 // Open the month drill-down as a right flyout: re-parent the persistent
@@ -1368,8 +1385,8 @@ function setHabitsPageHeader() {
 
 // Two-tier breadcrumb header for the Habits full-page detail view. Replaces
 // the "Your Habits for [chip]" content while the full-page is on screen.
-//   eyebrow: ‹ Habits   (click → dismissFullPage)
-//   H1:      {scope} · {Month}
+//   eyebrow: ‹ Habits           (click → dismissFullPage)
+//   H1:      {scope} · [Month]   (the month is a clickable picker)
 function setHabitsDetailHeader() {
   const titleEl = document.getElementById('page-title');
   const subEl   = document.getElementById('page-subtitle');
@@ -1377,16 +1394,29 @@ function setHabitsDetailHeader() {
 
   const isAll = lensLevel === 'all';
   const scope = isAll ? 'All Spending' : (lensCategory || 'Habits');
+  const emoji = isAll ? '📊' : catEmoji(scope);
   const monthLbl = lensMonth ? formatMonthLabel(lensMonth) : '';
-  const h1Text   = monthLbl ? `${scope} · ${monthLbl}` : scope;
+  const emojiHtml = emoji
+    ? `<span class="cat-emoji" aria-hidden="true" style="margin-right:0.5rem">${emoji}</span>`
+    : '';
+  // Month-picker chip: matches the Overview month-button pattern (underline +
+  // hover-darken, opens a dropdown / mobile sheet listing every month).
+  const monthBtnHtml = monthLbl
+    ? ` · <button id="dd-month-btn" type="button"`
+    + ` class="cursor-pointer hover:opacity-80 underline decoration-solid underline-offset-4`
+    + ` focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-sm"`
+    + ` aria-haspopup="listbox" aria-expanded="false">${escHtml(monthLbl)}</button>`
+    : '';
 
   titleEl.innerHTML =
       `<button type="button" id="habits-detail-back"`
-    + ` class="inline-flex items-center gap-1 text-base font-semibold text-neutral-600 hover:text-neutral-800 mb-1 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-sm">`
+    + ` class="inline-flex items-center gap-1 text-base font-semibold text-neutral-600 hover:text-neutral-800 mb-3 focus:outline-none focus:ring-2 focus:ring-accent-700 rounded-sm">`
     + `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">`
     + `<path fill-rule="evenodd" d="M12.78 5.22a.75.75 0 0 1 0 1.06L9.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"/>`
     + `</svg><span>Habits</span></button>`
-    + `<span class="block">${escHtml(h1Text)}</span>`;
+    + `<span class="block">${emojiHtml}${escHtml(scope)}${monthBtnHtml}</span>`;
+
+  if (monthLbl) buildDdMonthPanel(lensMonth);
 
   subEl.innerHTML = '&nbsp;';
 
@@ -1398,6 +1428,95 @@ function setHabitsDetailHeader() {
   // still reads where you are.
   const sticky = document.getElementById('sticky-title');
   if (sticky) sticky.textContent = `Habits / ${scope}`;
+}
+
+// Build (or rebuild) the drill-down month dropdown anchored under
+// #dd-month-btn. Lists every month in months.json, newest-first, with the
+// active month highlighted. Selecting one calls setLensMonth → triggers a
+// full drill-down re-render via drilldownActive(). On mobile the same flow
+// is exposed via openDdMonthSheet (bottom sheet). The chip's click handler
+// is wired here once per H1 render (the chip is a fresh DOM node each time).
+let _ddMonthOutsideClickWired = false;
+function buildDdMonthPanel(activeMonth) {
+  fetchJsonCached('months.json').then(monthsResp => {
+    const chip = document.getElementById('dd-month-btn');
+    if (!chip) return;
+    const wrapper = chip.closest('.relative') || chip.parentElement?.parentElement;
+    if (!wrapper) return;
+
+    let panel = document.getElementById('dd-month-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'dd-month-panel';
+      panel.className = 'hidden absolute z-30 mt-2 min-w-[12rem] max-h-[60vh] overflow-y-auto bg-white border border-neutral-200 rounded-xl shadow-lg py-1';
+      wrapper.appendChild(panel);
+    }
+
+    const months = (Array.isArray(monthsResp) ? monthsResp.slice() : []);
+    if (activeMonth && !months.includes(activeMonth)) months.push(activeMonth);
+    months.sort();
+
+    panel.innerHTML = '';
+    months.slice().reverse().forEach(m => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      const isActive = m === activeMonth;
+      b.className = ['block w-full text-left text-sm px-3 py-1.5 hover:bg-neutral-50 whitespace-nowrap',
+                     isActive ? 'bg-neutral-100 text-neutral-900 font-semibold' : 'text-neutral-700'].join(' ');
+      b.textContent = formatMonthLabel(m);
+      b.addEventListener('click', () => { panel.classList.add('hidden'); setLensMonth(m); });
+      panel.appendChild(b);
+    });
+
+    panel.style.left = chip.offsetLeft + 'px';
+    panel.style.top  = (chip.offsetTop + chip.offsetHeight + 4) + 'px';
+
+    // Toggle the panel on chip click. The chip is freshly inserted on every
+    // H1 render so we attach the click each time (no accumulation — the old
+    // button was destroyed by innerHTML rewrite).
+    chip.addEventListener('click', e => {
+      e.stopPropagation();
+      if (window.innerWidth < 768) { openDdMonthSheet(); return; }
+      panel.classList.toggle('hidden');
+    });
+
+    // One global outside-click listener — wired once to avoid stacking on
+    // each header re-render.
+    if (!_ddMonthOutsideClickWired) {
+      _ddMonthOutsideClickWired = true;
+      document.addEventListener('click', e => {
+        const p = document.getElementById('dd-month-panel');
+        if (!p || p.classList.contains('hidden')) return;
+        if (p.contains(e.target)) return;
+        const c = document.getElementById('dd-month-btn');
+        if (c && c.contains(e.target)) return;
+        p.classList.add('hidden');
+      });
+    }
+  });
+}
+
+function openDdMonthSheet() {
+  if (!window.MoneyHabitsIOS) return;
+  fetchJsonCached('months.json').then(monthsResp => {
+    const months = (Array.isArray(monthsResp) ? monthsResp.slice() : []);
+    if (lensMonth && !months.includes(lensMonth)) months.push(lensMonth);
+    months.sort();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'px-2 pb-4';
+    months.slice().reverse().forEach(m => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      const isActive = m === lensMonth;
+      b.className = ['block w-full text-left px-3 py-3 rounded-lg',
+                     isActive ? 'bg-neutral-100 text-neutral-900 font-semibold' : 'text-neutral-700 hover:bg-neutral-50'].join(' ');
+      b.textContent = formatMonthLabel(m);
+      b.addEventListener('click', () => { MoneyHabitsIOS.closeBottomSheet(); setLensMonth(m); });
+      wrap.appendChild(b);
+    });
+    MoneyHabitsIOS.openBottomSheet({ title: 'Select month', content: wrap });
+  });
 }
 
 // Compare mode: dormant. UI removed (the right-rail Compare select is gone) but
@@ -1975,9 +2094,26 @@ async function renderHabitsChart() {
              ticks: { ...base.scales.x.ticks, callback: (v, i) => ticktext[i] } },
         y: { ...base.scales.y, stacked: mode === 'stacked', beginAtZero: true },
       },
-      // Click-to-drill: stacked segment → scope drill; otherwise focus the month.
-      onClick: (evt, elements) => {
-        if (!elements.length) return;
+      // Click-to-drill: stacked segment → scope drill; bar background OR
+      // x-axis tick-strip → focus the month (same as bar-background click).
+      onClick: (evt, elements, ch) => {
+        if (!elements.length) {
+          // No bar/segment was hit. If the click landed below the chart area
+          // (in the x-axis tick strip), treat it as a month-focus click on
+          // the nearest column. Same end state as clicking the bar background.
+          const native = evt.native;
+          if (!native || !ch.chartArea) return;
+          if (native.offsetY <= ch.chartArea.bottom) return;
+          const xValue = ch.scales.x.getValueForPixel(native.offsetX);
+          const idx    = Math.round(xValue);
+          const monthKey = periods[idx];
+          if (monthKey) {
+            _focusedMonth = monthKey;
+            setLensMonth(monthKey);
+            openDrillDownFlyout();
+          }
+          return;
+        }
         const { datasetIndex, index } = elements[0];
         if (mode === 'stacked') {
           const name = datasets[datasetIndex]?.label;
@@ -1995,7 +2131,13 @@ async function renderHabitsChart() {
       },
       onHover: (evt, elements, ch) => {
         const idx = elements.length ? elements[0].index : -1;
-        ch.canvas.style.cursor = idx >= 0 ? 'pointer' : 'default';
+        // Pointer cursor over bars OR the x-axis tick strip (which is also
+        // clickable now). Default elsewhere.
+        let overAxis = false;
+        if (idx < 0 && evt.native && ch.chartArea) {
+          overAxis = evt.native.offsetY > ch.chartArea.bottom;
+        }
+        ch.canvas.style.cursor = (idx >= 0 || overAxis) ? 'pointer' : 'default';
         if (ch.$lastHover === idx) return;       // only re-highlight on change
         ch.$lastHover = idx;
         applyMonthHighlight(idx >= 0 ? { pointIdx: idx } : undefined);
@@ -2314,16 +2456,9 @@ function formatTxnDate(ymd) {
   });
 }
 
-// "Monday - May 5"-style date for tooltip subtitles. Weekday + month name +
-// day, no year — concise and readable in a small surface.
-function formatBubbleDate(ymd) {
-  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd || '';
-  const [y, m, d] = ymd.split('-').map(Number);
-  const dt = new Date(y, m - 1, d);
-  const weekday = dt.toLocaleDateString('en-US', { weekday: 'long' });
-  const monthDay = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  return `${weekday} - ${monthDay}`;
-}
+// Bubble tooltip date — unified to the same "Mar 17, 2026" format used in the
+// Transactions tab + drill-down table so dates read the same everywhere.
+function formatBubbleDate(ymd) { return formatTxnDate(ymd); }
 
 // ── Categories (Category Spending) ────────────────────────────────────────────
 
@@ -2468,24 +2603,15 @@ function buildCategoriesTabUI() {
 
   // Drill-down skeleton — content is filled in by renderDrillDown().
   ddSec.innerHTML = `
-    <div id="dd-inner" class="bg-white border border-neutral-200 rounded-lg p-6 flex flex-col gap-6">
+    <div id="dd-inner" class="flex flex-col gap-6">
 
-      <!-- Header — category identity + the focused month (side-by-side has no
-           flyout title, so the month label lives here). The budget-tag chip
-           pair (spend_type · budget_bucket) shows on leaf scope only. -->
-      <div class="flex items-center gap-3 min-w-0">
-        <span id="dd-color-dot" class="w-10 h-10 rounded-full flex-none inline-flex items-center justify-center text-xl"></span>
-        <div class="min-w-0">
-          <h3 id="dd-cat-name" class="font-bold text-2xl text-neutral-500 truncate leading-tight"></h3>
-          <p id="dd-month-heading" class="text-sm text-neutral-500"></p>
-          <div id="dd-budget-tags" class="hidden mt-2 flex items-center gap-1.5"></div>
-        </div>
-      </div>
-
-      <!-- Row 1: pie + quick stats, stacked (the drill-down pane is narrow). -->
-      <div class="grid grid-cols-1 gap-6">
-        <!-- Pie card: col 1-2 -->
-        <div class="col-span-1 md:col-span-2 bg-white border border-neutral-200 rounded-lg shadow-sm overflow-hidden flex flex-col">
+      <!-- Row 1: pie card on the left, quick-stat cards on the right. The
+           outer "dd-row-pie-stats" stacks vertically by default (flyout = narrow);
+           in full-page (#dd-inner.dd-fullpage) it flips to a 2fr/1fr two-column
+           layout via the .dd-row-pie-stats / #dd-quick-stats rules in style.css. -->
+      <div class="dd-row-pie-stats grid grid-cols-1 gap-6">
+        <!-- Pie card -->
+        <div class="bg-white border border-neutral-200 rounded-lg shadow-sm overflow-hidden flex flex-col">
           <div class="px-6 pt-6 pb-3 shrink-0 flex flex-col items-start gap-3">
             <p id="dd-pie-title" class="font-semibold text-xl text-neutral-900 leading-snug min-w-0"></p>
             <p id="dd-pie-subtitle" class="text-sm text-neutral-600 leading-snug"></p>
@@ -2502,15 +2628,44 @@ function buildCategoriesTabUI() {
           </div>
         </div>
 
-        <!-- Quick stats: col 3-5, KPI-style cards. Transactions + Avg Transaction
-             sit side-by-side; Most Active Day spans the full row below them. -->
-        <div id="dd-quick-stats" class="col-span-1 md:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4 self-stretch"></div>
+        <!-- Quick stats — KPI-style cards, always stacked vertically. Flyout:
+             below the donut. Full-page (#dd-inner.dd-fullpage): to the right
+             of the donut, still stacked. -->
+        <div id="dd-quick-stats" class="grid grid-cols-1 gap-4 self-stretch"></div>
       </div>
 
-      <!-- Row 2: cumulative chart + top locations, stacked. -->
-      <div class="grid grid-cols-1 gap-5">
-        <!-- Cumulative chart: col 1-3 -->
-        <div class="col-span-1 md:col-span-3 bg-white border border-neutral-200 rounded-lg shadow-sm flex flex-col">
+      <!-- Row 2: bubble chart + transactions table. Flyout: stacked. Full-page
+           (#dd-inner.dd-fullpage): 3fr / 1fr side-by-side (rule in style.css). -->
+      <div class="dd-row-bubble-table grid grid-cols-1 gap-5">
+        <div class="bg-white border border-neutral-200 rounded-lg shadow-sm">
+          <div class="px-6 pt-6 pb-0 flex items-center justify-between">
+            <p id="dd-bubble-title" class="font-semibold text-xl text-neutral-900"></p>
+            <div id="dd-bubble-legend" class="hidden flex items-center gap-4 text-xs text-neutral-500"></div>
+          </div>
+          <div class="px-6 pb-6 pt-4">
+            <div id="dd-bubble" class="w-full" style="height:260px;overflow:hidden"></div>
+          </div>
+        </div>
+
+        <!-- Transaction table(s) — rendered dynamically by renderDdTable. -->
+        <div id="dd-table-outer"></div>
+      </div>
+
+      <!-- Row 3: top locations (LEFT, 1fr) + cumulative chart (RIGHT, 3fr).
+           Flyout: stacked. Full-page (#dd-inner.dd-fullpage): 1fr / 3fr
+           side-by-side (rule in style.css). -->
+      <div class="dd-row-cumul-locations grid grid-cols-1 gap-5">
+        <!-- Top locations (title swaps by scope: Top Categories for all/parent, Top Locations for leaf) -->
+        <div class="bg-white border border-neutral-200 rounded-lg shadow-sm flex flex-col">
+          <div class="px-6 pt-6 pb-0 shrink-0">
+            <p id="dd-locations-title" class="font-semibold text-xl text-neutral-900">Top Locations</p>
+          </div>
+          <div class="px-6 pt-4 pb-6">
+            <div id="dd-locations" class="flex flex-col gap-3.5"></div>
+          </div>
+        </div>
+
+        <div class="bg-white border border-neutral-200 rounded-lg shadow-sm flex flex-col">
           <div class="px-6 pt-6 pb-0 flex items-center justify-between shrink-0">
             <p id="dd-cumul-title" class="font-semibold text-xl text-neutral-900"></p>
             <p id="dd-compare-legend" class="hidden text-xs text-neutral-500 italic"></p>
@@ -2521,31 +2676,7 @@ function buildCategoriesTabUI() {
             <div id="dd-cumulative" class="w-full"></div>
           </div>
         </div>
-
-        <!-- Top locations: col 4-5 (title swaps by scope: Top Categories for all/parent, Top Locations for leaf) -->
-        <div class="col-span-1 md:col-span-2 bg-white border border-neutral-200 rounded-lg shadow-sm flex flex-col">
-          <div class="px-6 pt-6 pb-0 shrink-0">
-            <p id="dd-locations-title" class="font-semibold text-xl text-neutral-900">Top Locations</p>
-          </div>
-          <div class="px-6 pt-4 pb-6">
-            <div id="dd-locations" class="flex flex-col gap-3.5"></div>
-          </div>
-        </div>
       </div>
-
-      <!-- Row 3: full-width bubble chart -->
-      <div class="bg-white border border-neutral-200 rounded-lg shadow-sm">
-        <div class="px-6 pt-6 pb-0 flex items-center justify-between">
-          <p id="dd-bubble-title" class="font-semibold text-xl text-neutral-900"></p>
-          <div id="dd-bubble-legend" class="hidden flex items-center gap-4 text-xs text-neutral-500"></div>
-        </div>
-        <div class="px-6 pb-6 pt-4">
-          <div id="dd-bubble" class="w-full" style="height:260px;overflow:hidden"></div>
-        </div>
-      </div>
-
-      <!-- Row 4: transaction table(s) — rendered dynamically by renderDdTable -->
-      <div id="dd-table-outer"></div>
 
     </div>
   `;
@@ -2605,29 +2736,24 @@ function renderDrillDownView(data, compareData) {
   if (!data) return;
   // Clear any tooltip stranded by the previous render's chart teardown.
   hideCustomTooltip();
+
+  // Toggle the dd-fullpage class on #dd-inner so the pie + quick-stats row
+  // can flip from a vertical stack (flyout) to a side-by-side 2fr/1fr layout
+  // (full-page detail). CSS rules live in static/css/style.css.
+  const ddInner = document.getElementById('dd-inner');
+  if (ddInner) ddInner.classList.toggle('dd-fullpage', inFullPageHost());
   hideCjsTip();
 
   const monthLabel = formatMonthLabel(data.year_month);
   const level = data.level || 'leaf';
   const headerName = data.category;
 
-  // Header dot + name. For 'all' scope, use a neutral default chip.
-  const headerDot = document.getElementById('dd-color-dot');
-  if (headerDot) {
-    if (level === 'all') {
-      headerDot.setAttribute('style', `background-color:var(--color-cat-default-bg);color:var(--color-cat-default-fg);`);
-      headerDot.innerHTML = `<span class="cat-emoji" aria-hidden="true" style="margin-right:0">📊</span>`;
-    } else {
-      headerDot.setAttribute('style', catChipStyle(headerName));
-      headerDot.innerHTML = `<span class="cat-emoji" aria-hidden="true" style="margin-right:0">${catEmoji(headerName)}</span>`;
-    }
-  }
-  document.getElementById('dd-cat-name').textContent = headerName;
-  const ddMonthHeading = document.getElementById('dd-month-heading');
-  if (ddMonthHeading) ddMonthHeading.textContent = `${monthLabel} in detail`;
-
-  // Budget tags (spend_type · budget_bucket) — leaf scope only.
-  renderDdBudgetTags(data.spend_type, data.budget_bucket);
+  // The identity row (emoji circle + category name + "Month in detail")
+  // is gone — the full-page H1 breadcrumb (setHabitsDetailHeader) and the
+  // flyout title (drillFlyoutTitle) carry that identity now. Budget tags
+  // (VARIABLE · WANT) were briefly displayed here too; removed per user
+  // request — the data still rides on transactions.json + leaf-scope
+  // category-detail payloads for the Transactions tab filters.
 
   // Locations card title swaps by scope.
   const locTitle = document.getElementById('dd-locations-title');
@@ -2637,11 +2763,12 @@ function renderDrillDownView(data, compareData) {
                          :                      'Top Locations';
   }
 
-  // Cumulative + bubble titles include scope label.
+  // Cumulative + bubble titles — month label is omitted; the drill-down
+  // identity row above already carries the focused month.
   const cumTitle = document.getElementById('dd-cumul-title');
-  if (cumTitle) cumTitle.textContent = `Cumulative Spend — ${monthLabel}`;
+  if (cumTitle) cumTitle.textContent = 'Cumulative Spend';
   const bubTitle = document.getElementById('dd-bubble-title');
-  if (bubTitle) bubTitle.textContent = `Transaction Bubbles — ${monthLabel}`;
+  if (bubTitle) bubTitle.textContent = 'Transaction Bubbles';
 
   // Pick a primary color for the category being scoped (default-gray for 'all').
   // 'all' scope drives the cumulative line + bubble color in brand indigo (accent-700).
@@ -2780,6 +2907,9 @@ function renderDdPie(data, color) {
   const total = values.reduce((a, b) => a + (b || 0), 0);
 
   const base = chartLayout();
+  // Flyout: kill the donut's per-slice hover lift (arc-expand + brighter
+  // fill). Full-page keeps default hover. Tooltips stay in both.
+  const pieHoverFlat = !inFullPageHost();
   mountChart('dd-pie', {
     type: 'doughnut',
     data: {
@@ -2789,13 +2919,20 @@ function renderDdPie(data, color) {
         backgroundColor: colors,
         borderColor: token('color-white'),
         borderWidth: 1,
+        ...(pieHoverFlat ? { hoverOffset: 0,
+                             hoverBackgroundColor: colors,
+                             hoverBorderColor: token('color-white'),
+                             hoverBorderWidth: 1 } : {}),
       }],
     },
     options: {
       ...base,
       cutout: '60%',
       // Outside labels (composition) need breathing room around the donut.
-      layout: { padding: isComposition ? 28 : 8 },
+      // Composition labels are 2-line (category name + percentage); 28px
+      // wasn't enough vertical room so the bottom slice's % got clipped.
+      // 40 + 8px extra horizontal for long names like "Transportation".
+      layout: { padding: isComposition ? { top: 40, right: 48, bottom: 40, left: 48 } : 8 },
       scales: {},   // doughnut has no axes
       onClick: (evt, elements) => {
         // Click-to-drill on compositional donuts: all → parent, parent → leaf.
@@ -3024,9 +3161,7 @@ function renderDdQuickStats(data, prevData) {
     const card = document.createElement('div');
     // KPI-strip mimicry: vertical stack — eyebrow on top, big value below,
     // description right under, delta + comparison line bottom-anchored.
-    // The 3rd card (Most Active Day) spans both columns on the row below.
-    const colSpan = idx === 2 ? ' sm:col-span-2' : '';
-    card.className = `bg-white rounded-lg border border-neutral-200 shadow-sm p-6 flex flex-col h-full${colSpan}`;
+    card.className = 'bg-white rounded-lg border border-neutral-200 shadow-sm p-6 flex flex-col h-full';
 
     let badgeHtml = '';
     let subHtml   = '';
@@ -3065,26 +3200,21 @@ function renderDdQuickStats(data, prevData) {
 const SPEND_TYPE_LABEL    = { fixed: 'Fixed', variable: 'Variable' };
 const BUDGET_BUCKET_LABEL = { needs: 'Need', wants: 'Want', savings_loans: 'Savings / Loans' };
 
-// Tailwind-class helpers for the chip pair. Soft tinted background + bordered;
-// colors echo the utility palette without inventing new tokens. Hidden when
-// no tag is present (parent/all scope) or when called with falsy values.
+// Render the budget-tag pair as an all-caps eyebrow line — "VARIABLE · NEED"
+// — instead of two colored pill chips. Semibold, tracked-out, neutral hue.
+// Single source of truth for the visual; if a future surface ever surfaces
+// these tags (e.g. transaction-row hover detail), it should call through
+// here so the look stays in sync.
 function renderDdBudgetTags(spendType, budgetBucket) {
   const wrap = document.getElementById('dd-budget-tags');
   if (!wrap) return;
   if (!spendType && !budgetBucket) { wrap.classList.add('hidden'); wrap.innerHTML = ''; return; }
 
-  const pill = (text, cls) =>
-    `<span class="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-full border ${cls}">${escHtml(text)}</span>`;
+  const parts = [];
+  if (spendType)    parts.push(SPEND_TYPE_LABEL[spendType]       || spendType);
+  if (budgetBucket) parts.push(BUDGET_BUCKET_LABEL[budgetBucket] || budgetBucket);
 
-  const stCls = spendType === 'fixed'
-    ? 'bg-neutral-100 text-neutral-700 border-neutral-200'
-    : 'bg-accent-50 text-accent-700 border-accent-100';
-  const bbCls = budgetBucket === 'needs'        ? 'bg-utility-green-50 text-utility-green-700 border-utility-green-100'
-              : budgetBucket === 'wants'        ? 'bg-utility-red-50 text-utility-red-700 border-utility-red-100'
-              : /* savings_loans */               'bg-accent-50 text-accent-700 border-accent-100';
-
-  wrap.innerHTML = (spendType    ? pill(SPEND_TYPE_LABEL[spendType]   || spendType,    stCls) : '')
-                 + (budgetBucket ? pill(BUDGET_BUCKET_LABEL[budgetBucket] || budgetBucket, bbCls) : '');
+  wrap.innerHTML = `<span class="text-xs font-semibold tracking-wide uppercase text-neutral-500">${escHtml(parts.join(' · '))}</span>`;
   wrap.classList.remove('hidden');
   wrap.classList.add('flex');
 }
@@ -3137,18 +3267,24 @@ function renderDdCumulative(data, compareData, color) {
     return arr;
   };
 
+  // Flyout: kill the hover dot on the cumulative line. Full-page keeps it.
+  const cumHoverFlat = !inFullPageHost();
+  // Extend the clip area past the chart bounds so the day-1 / day-N hover
+  // dots (radius 9) aren't sliced in half at the left/right edges.
+  const HOVER_CLIP = { left: -12, right: -12, top: -12, bottom: 0 };
   const datasets = [{
     label: formatMonthLabel(data.year_month),
     data: seriesByDay(data.cumulative_spend),
     borderColor: color,
     borderWidth: 2.5,
     pointRadius: 0,            // baseline: no dots — the hover dot is drawn natively
-    pointHoverRadius: 9,
+    pointHoverRadius: cumHoverFlat ? 0 : 9,
     pointHoverBackgroundColor: color,
     pointHoverBorderColor: token('color-white'),
-    pointHoverBorderWidth: 2,
+    pointHoverBorderWidth: cumHoverFlat ? 0 : 2,
     tension: 0,
     spanGaps: true,
+    clip: HOVER_CLIP,
     _compare: false,
   }];
 
@@ -3198,14 +3334,17 @@ function renderDdCumulative(data, compareData, color) {
 }
 
 // Cumulative line tooltip spec — distinguishes the primary line from the dotted
-// compare overlay (dataset._compare flag).
+// compare overlay (dataset._compare flag). Title uses the month name + day
+// (e.g. "March 14") instead of generic "Day X".
 function cjsTipCumul(ctx) {
   const dp = ctx.tooltip.dataPoints?.[0];
   if (!dp) return null;
   const ds = dp.dataset;
   const value = fmt(dp.parsed.y || 0);
+  // ds.label is "March 2026" (from formatMonthLabel) — first word is the month.
+  const monthName = (ds.label || '').split(' ')[0];
   return {
-    title: `Day ${dp.label}`,
+    title: monthName ? `${monthName} ${dp.label}` : `${dp.label}`,
     meta: ds.label || '',
     value: ds._compare ? `Last month: ${value}` : value,
   };
@@ -3286,9 +3425,12 @@ function renderDdBubble(data, compareData, color) {
   }
 
   // Dynamic height: tallest stack across both sets (y is a pixel coordinate).
+  // Full-page detail uses a taller min so the bubble card sits flush with the
+  // adjacent Transactions table card (which has a 320px scroll area inside).
   const allPositions = [...catBubblePositions, ...comparePositions];
   const maxY = Math.max(...allPositions.map(p => p.y + p.size / 2));
-  const chartH = Math.max(220, Math.ceil(maxY) + 24);
+  const minH = inFullPageHost() ? 320 : 220;
+  const chartH = Math.max(minH, Math.ceil(maxY) + 24);
   if (bubEl) bubEl.style.height = chartH + 'px';
 
   const [yr, mo] = data.year_month.split('-').map(Number);
@@ -3300,15 +3442,23 @@ function renderDdBubble(data, compareData, color) {
     origIndex: p.origIndex, ...extra,
   }));
 
+  // Flyout: kill Chart.js's per-bubble hover lift (radius bump + color
+  // shift). Full-page detail keeps the default hover behavior so the
+  // bubble↔table sync visuals work. Tooltips stay in both contexts.
+  const hoverFlat = !inFullPageHost();
+
   const datasets = [];
   // Compare dataset (grey) — pushed first so it draws behind the primary.
   if (comparePositions.length) {
+    const cmpBg = hexToRgba(token('color-gray-400'), 0.45);
     datasets.push({
       label: formatMonthLabel(compareData.year_month),
       data: toPoints(comparePositions, { isCompare: true }),
-      backgroundColor: hexToRgba(token('color-gray-400'), 0.45),
+      backgroundColor: cmpBg,
       borderColor: 'rgba(255,255,255,0.7)', borderWidth: 1,
       _noHighlight: true,
+      ...(hoverFlat ? { hoverRadius: 0, hoverBackgroundColor: cmpBg,
+                        hoverBorderColor: 'rgba(255,255,255,0.7)', hoverBorderWidth: 1 } : {}),
     });
   }
   // Primary dataset (colored, on top). Per-point backgroundColor array so the
@@ -3321,6 +3471,9 @@ function renderDdBubble(data, compareData, color) {
     backgroundColor: catBubblePositions.map(() => base),
     borderColor: 'rgba(255,255,255,0.9)', borderWidth: 1.5,
     _base: base, _full: hexToRgba(color, 1), _dim: hexToRgba(color, 0.18),
+    ...(hoverFlat ? { hoverRadius: 0,
+                      hoverBackgroundColor: catBubblePositions.map(() => base),
+                      hoverBorderColor: 'rgba(255,255,255,0.9)', hoverBorderWidth: 1.5 } : {}),
   });
 
   const layoutBase = chartLayout();
@@ -3331,11 +3484,25 @@ function renderDdBubble(data, compareData, color) {
       ...layoutBase,
       interaction: { mode: 'nearest', intersect: true },
       scales: {
-        x: { type: 'linear', min: 0.5, max: daysInMonth + 0.5,
+        // Extend the axis half a day past each edge so the largest possible
+        // bubble (MAX_SIZE/2 = 22px radius) at day 1 / daysInMonth isn't
+        // clipped against the canvas edge.
+        x: { type: 'linear', min: 0, max: daysInMonth + 1,
              grid: { display: false },
+             // Match the cumulative chart's tick format ("Mar 1", "Mar 5"…)
+             // with 45° rotation. Force explicit tick values (1, 5, 10, 15,
+             // 20, 25, last-day) via afterBuildTicks — Chart.js's autoSkip
+             // on a linear axis was collapsing everything down to one tick.
+             afterBuildTicks: (axis) => {
+               const days = new Set([1]);
+               for (let d = 5; d <= daysInMonth; d += 5) days.add(d);
+               days.add(daysInMonth);
+               axis.ticks = [...days].sort((a, b) => a - b).map(v => ({ value: v }));
+             },
              ticks: { color: token('color-gray-500'), font: { size: 10 },
-                      stepSize: 1, autoSkip: true, maxTicksLimit: 10,
-                      callback: (v) => Number.isInteger(v) ? `${MONTH_LABELS[mo - 1]} ${v}` : '' } },
+                      maxRotation: 45, minRotation: 45, autoSkip: false,
+                      callback: (v) => (Number.isInteger(v) && v >= 1 && v <= daysInMonth)
+                                       ? `${MONTH_LABELS[mo - 1]} ${v}` : '' } },
         y: { min: 0, max: chartH, display: false },
       },
       onHover: (evt, els, ch) => {
@@ -3356,11 +3523,21 @@ function renderDdBubble(data, compareData, color) {
 }
 
 // Bubble↔table hover sync (both directions call these). Lift the matching
-// primary bubble + its table row; dim the rest.
+// primary bubble + its table row; dim the rest. Gated to the full-page
+// detail view only — the flyout is too cramped for the dim/lift effect to
+// help, so we keep it static there.
 function highlightBubble(idx) {
+  if (!inFullPageHost()) return;
+  let matchedRow = null;
   document.querySelectorAll('#dd-table-body tr').forEach(row => {
-    row.classList.toggle('bg-neutral-100', Number(row.dataset.idx) === idx);
+    const isMatch = Number(row.dataset.idx) === idx;
+    row.classList.toggle('bg-neutral-100', isMatch);
+    if (isMatch) matchedRow = row;
   });
+  // Auto-scroll the table so the highlighted row is visible within its
+  // scroll container (the .overflow-y-auto wrapper around #dd-table-body).
+  // 'nearest' keeps it minimal — no jump unless the row is off-screen.
+  if (matchedRow) matchedRow.scrollIntoView({ block: 'nearest', behavior: 'auto' });
   const chart = _charts['dd-bubble'];
   if (!chart || !catBubblePositions.length) return;
   const ds = chart.data.datasets[catPrimaryBubbleDsIdx];
@@ -3369,6 +3546,7 @@ function highlightBubble(idx) {
   chart.update('none');
 }
 function clearBubbleHighlight() {
+  if (!inFullPageHost()) return;
   document.querySelectorAll('#dd-table-body tr').forEach(r => r.classList.remove('bg-neutral-100'));
   const chart = _charts['dd-bubble'];
   if (!chart || !catBubblePositions.length) return;
@@ -3470,8 +3648,10 @@ function renderDdTable(data, compareData) {
     // Card header
     const hdr = document.createElement('div');
     hdr.className = 'px-6 pt-6 pb-0';
+    // Compare mode still names the month (the card itself is per-month);
+    // single-card mode omits it — the drill-down identity row carries it.
     hdr.innerHTML = `<p class="font-semibold text-xl text-neutral-900">
-      ${hasCompare ? escHtml(formatMonthLabel(panelMonth)) : `All Transactions — ${escHtml(formatMonthLabel(panelMonth))}`}
+      ${hasCompare ? escHtml(formatMonthLabel(panelMonth)) : 'All Transactions'}
     </p>`;
     card.appendChild(hdr);
 
@@ -3510,7 +3690,7 @@ function renderDdTable(data, compareData) {
           ? `<td class="py-2 pr-3"><span class="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full whitespace-nowrap" style="${catChipStyle(t.category || 'Uncategorized')}">${catLabelHtml(t.category || 'Uncategorized')}</span></td>`
           : '';
         tr.innerHTML = `
-          <td class="py-2 pr-3 text-xs text-neutral-500 whitespace-nowrap">${t.date}</td>
+          <td class="py-2 pr-3 text-xs text-neutral-500 whitespace-nowrap">${escHtml(formatTxnDate(t.date))}</td>
           <td class="py-2 pr-3 text-sm text-neutral-700 font-medium truncate max-w-[110px]" title="${escHtml(t.name)}">${escHtml(t.name)}</td>
           ${categoryCell}
           <td class="py-2 text-right text-sm text-neutral-900 font-medium tabular-nums whitespace-nowrap">${fmt(t.amount)}</td>

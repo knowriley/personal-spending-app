@@ -208,6 +208,18 @@
 #rail-collapse-btn svg { transition: transform 0.18s ease; }
 #side-rail[data-collapsed="true"] #rail-collapse-btn svg { transform: rotate(180deg); }
 
+/* Drill-down full-page layout: when #dd-inner gets the dd-fullpage class
+   (set by JS when the drill-down is re-parented into #habits-fullpage-host),
+   Row 1 flips from a vertical stack to a 2fr/1fr horizontal layout with the
+   quick-stat cards stacked vertically on the right of the donut. */
+#dd-inner.dd-fullpage .dd-row-pie-stats { grid-template-columns: 2fr 1fr; }
+#dd-inner.dd-fullpage #dd-quick-stats {
+  grid-template-columns: 1fr;
+  align-content: start;
+}
+#dd-inner.dd-fullpage .dd-row-bubble-table   { grid-template-columns: 3fr 1fr; align-items: stretch; }
+#dd-inner.dd-fullpage .dd-row-cumul-locations { grid-template-columns: 1fr 3fr; align-items: stretch; }
+
 /* Bottom-bar cell (mobile): stacked icon + label, equal thirds. */
 .bottom-btn {
   flex-direction: column;

@@ -114,10 +114,23 @@
       font: 600 18px -apple-system, system-ui, sans-serif;
       -webkit-tap-highlight-color: transparent;
     }
+    .mh-ios-flyout-expand {
+      height: 44px;
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 6px; padding: 0 10px;
+      background: transparent; border: 0;
+      color: #4338ca; cursor: pointer;
+      font: 600 13px -apple-system, system-ui, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      border-radius: 8px;
+    }
+    .mh-ios-flyout-expand:hover { background: rgba(67, 56, 202, 0.06); }
+    .mh-ios-flyout-expand-label { white-space: nowrap; }
     .mh-ios-flyout-title {
       font: 600 16px -apple-system, system-ui, sans-serif;
       color: #1c1c1e;
-      text-align: center;
+      text-align: left;
+      padding-left: 12px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .mh-ios-flyout-content {
@@ -386,13 +399,8 @@
     const header = document.createElement('div');
     header.className = 'mh-ios-flyout-header';
 
-    const back = document.createElement('button');
-    back.type = 'button';
-    back.className = 'mh-ios-flyout-back';
-    back.setAttribute('aria-label', 'Back');
-    back.textContent = '←';
-    back.addEventListener('click', () => closeRightFlyout());
-
+    // Title takes the leftmost cell — the back arrow (← duplicate of X close)
+    // is gone. Header grid is rebuilt below to "1fr 44px" or "1fr auto 44px".
     const titleEl = document.createElement('span');
     titleEl.className = 'mh-ios-flyout-title';
     titleEl.textContent = title;
@@ -404,18 +412,19 @@
     close.innerHTML = closeIconSvg();
     close.addEventListener('click', () => closeRightFlyout());
 
-    header.appendChild(back);
     header.appendChild(titleEl);
 
     // Optional expand button — caller passes onExpand to get a Notion-style
-    // "open as full page" affordance to the left of the close button.
+    // "open as full page" affordance to the left of the close button. Shows
+    // both the icon and a "Full page" text label so the affordance reads
+    // without a hover/tooltip.
     if (onExpand) {
       const expand = document.createElement('button');
       expand.type = 'button';
-      expand.className = 'mh-ios-flyout-close';
+      expand.className = 'mh-ios-flyout-expand';
       expand.setAttribute('aria-label', 'Open as full page');
       expand.title = 'Open as full page';
-      expand.innerHTML = expandIconSvg();
+      expand.innerHTML = `<span class="mh-ios-flyout-expand-label">Full page</span>${expandIconSvg()}`;
       expand.addEventListener('click', () => {
         // Skip the normal onDismiss path — caller will re-parent the content
         // into its full-page home before/after the flyout tears down.
@@ -424,8 +433,10 @@
         cb(content);
         closeRightFlyout();
       });
-      header.style.gridTemplateColumns = '44px 1fr 44px 44px';
+      header.style.gridTemplateColumns = '1fr auto 44px';
       header.appendChild(expand);
+    } else {
+      header.style.gridTemplateColumns = '1fr 44px';
     }
 
     header.appendChild(close);
